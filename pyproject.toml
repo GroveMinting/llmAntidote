@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-antidote"
-version = "0.1.0"
-description = "Runtime guardrails and model provenance inspection for Hermes Agent"
+version = "0.2.0"
+description = "Runtime guardrails, model provenance, and behavioral evaluation for Hermes Agent"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

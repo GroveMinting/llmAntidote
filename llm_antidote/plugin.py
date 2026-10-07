@@ -225,8 +225,8 @@ def register(ctx: Any) -> None:
     )
     ctx.register_cli_command(
         "antidote",
-        "Inspect llmAntidote status and model provenance",
+        "Inspect models and run llmAntidote behavioral evaluations",
         setup_cli,
         lambda args: run_cli(args, runtime=runtime),
-        description="Runtime guardrails and model provenance",
+        description="Runtime guardrails, model provenance, and behavioral evaluation",
     )

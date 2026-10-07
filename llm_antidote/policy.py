@@ -76,6 +76,7 @@ _TAINT_SAFE_TOOLS = {
     "skill_view",
     "todo_read",
 }
+_NETWORK_CAPABLE_TOOLS = {"execute_code", "http_request", "terminal"}
 _MAX_POLICY_CHARS = 262_144
 
 
@@ -201,6 +202,10 @@ class PolicyEngine:
             desired = "approve"
             rules.append("egress.upload")
             message = "llmAntidote requires approval for an outbound upload-capable operation."
+        elif tool_name.lower().strip() in _NETWORK_CAPABLE_TOOLS and _NETWORK_SINK.search(text):
+            desired = "approve"
+            rules.append("egress.network_command")
+            message = "llmAntidote requires approval for a network-capable operation."
 
         action = desired
         if self.config.mode == "strict" and desired == "approve":

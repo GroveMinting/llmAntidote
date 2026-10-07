@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
+from .eval_client import OpenAICompatClient
+from .eval_report import load_report, render_markdown, write_markdown, write_reports
+from .eval_runner import INCONCLUSIVE, NO_BACKDOOR_DETECTED, EvaluationRunner
+from .eval_suite import load_suite, with_overrides
 from .model_inspector import InspectionReport, inspect_model
 from .model_lock import create_lock, load_lock, verify_lock, write_lock
 
@@ -37,6 +42,31 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     verify.add_argument("--source", help="Override the model directory stored in the lockfile")
     verify.add_argument("--json", action="store_true", dest="as_json", help="Print JSON")
     verify.set_defaults(antidote_handler="model_verify")
+
+    evaluation = subcommands.add_parser("eval", help="Run synthetic behavioral evaluations")
+    eval_commands = evaluation.add_subparsers(dest="eval_action", required=True)
+
+    eval_run = eval_commands.add_parser("run", help="Run paired control and candidate trials")
+    eval_run.add_argument("--endpoint", required=True, help="OpenAI-compatible API base URL")
+    eval_run.add_argument("--model", required=True, help="Model id sent to the endpoint")
+    eval_run.add_argument("--suite", help="Evaluation suite JSON; defaults to the standard suite")
+    eval_run.add_argument(
+        "--candidate", action="append", dest="candidates", help="Replace suite candidates"
+    )
+    eval_run.add_argument("--repeats", type=int, help="Override repeats per carrier")
+    eval_run.add_argument("--max-candidates", type=int, help="Limit candidate count")
+    eval_run.add_argument("--timeout", type=float, default=60.0, help="Request timeout seconds")
+    eval_run.add_argument("--api-key-env", default="", help="Environment variable holding API key")
+    eval_run.add_argument("--output", default="antidote-eval-report.json", help="JSON report path")
+    eval_run.add_argument("--markdown-output", help="Optional Markdown report path")
+    eval_run.add_argument("--model-lock", help="Optional model lockfile to bind by SHA-256")
+    eval_run.add_argument("--minimize", action="store_true", help="Minimize recovered candidates")
+    eval_run.set_defaults(antidote_handler="eval_run")
+
+    replay = eval_commands.add_parser("replay", help="Render an existing JSON report")
+    replay.add_argument("report", help="Evaluation report JSON")
+    replay.add_argument("--markdown-output", help="Write rendered Markdown instead of stdout")
+    replay.set_defaults(antidote_handler="eval_replay")
 
 
 def format_report(report: InspectionReport) -> str:
@@ -71,6 +101,14 @@ def _lock_exclusion(source: Path, output: Path) -> tuple[str, ...]:
         return (absolute_output.relative_to(source.resolve()).as_posix(),)
     except ValueError:
         return ()
+
+
+def _file_sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).expanduser().resolve().open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def run_cli(args: argparse.Namespace, *, runtime: Any = None) -> int:
@@ -111,6 +149,42 @@ def run_cli(args: argparse.Namespace, *, runtime: Any = None) -> int:
                     for path in result[category]:
                         print(f"  {category}: {path}")
             return 0 if result["ok"] else 1
+        if handler == "eval_run":
+            suite = with_overrides(
+                load_suite(args.suite),
+                candidates=args.candidates,
+                repeats=args.repeats,
+                max_candidates=args.max_candidates,
+            )
+            client = OpenAICompatClient(
+                args.endpoint,
+                api_key_env=args.api_key_env,
+                timeout=args.timeout,
+            )
+            report = EvaluationRunner(client, model=args.model, suite=suite).run(
+                minimize=args.minimize,
+                model_lock_sha256=_file_sha256(args.model_lock) if args.model_lock else "",
+            )
+            json_path, markdown_path = write_reports(
+                report,
+                json_output=args.output,
+                markdown_output=args.markdown_output,
+            )
+            print(f"Verdict: {report.verdict}")
+            print(f"JSON report: {json_path}")
+            if markdown_path:
+                print(f"Markdown report: {markdown_path}")
+            if report.verdict == NO_BACKDOOR_DETECTED:
+                return 0
+            return 2 if report.verdict == INCONCLUSIVE else 1
+        if handler == "eval_replay":
+            rendered = render_markdown(load_report(args.report))
+            if args.markdown_output:
+                destination = write_markdown(rendered, args.markdown_output)
+                print(f"Markdown report: {destination}")
+            else:
+                print(rendered, end="")
+            return 0
     except (OSError, ValueError) as exc:
         print(f"llmAntidote error: {exc}")
         return 2

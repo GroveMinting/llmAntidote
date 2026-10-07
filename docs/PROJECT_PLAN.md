@@ -29,3 +29,12 @@ consequences of malicious model-generated tool calls.
 - Expanded command normalization and differential bypass corpus.
 - Hermes plugin catalog submission at an immutable commit.
 - Support for additional model registries.
+
+## v0.2 Behavioral Evaluation
+
+- OpenAI-compatible endpoint client with loopback-only plain HTTP.
+- Matched control and candidate trials across unrelated carrier prompts.
+- Synthetic tools that never execute shell, file, or network side effects.
+- Existing deterministic policy reused as the behavioral oracle.
+- Reproducibility thresholds, trigger minimization, and explicit inconclusive runs.
+- JSON and Markdown reports with prompt hashes rather than prompt bodies.

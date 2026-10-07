@@ -6,8 +6,9 @@
 [![Target: Hermes Agent](https://img.shields.io/badge/target-Hermes%20Agent-6F42C1)](https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins)
 [![Policy: Block + Approve](https://img.shields.io/badge/policy-block%20%2B%20approve-B42318)](docs/POLICY.md)
 [![Audit: Model Provenance](https://img.shields.io/badge/audit-model%20provenance-0A66C2)](docs/MODEL_PROVENANCE.md)
+[![Eval: Behavioral](https://img.shields.io/badge/eval-behavioral-2E7D32)](docs/BEHAVIORAL_EVALUATION.md)
 
-**Model provenance · tool-call interception · session taint tracking · fail-closed exfiltration defense**
+**Model provenance · tool-call interception · behavioral evaluation · fail-closed exfiltration defense**
 
 Inspect what you are running, constrain what it can access, and stop recognized
 credential-exfiltration chains before Hermes executes them.
@@ -38,6 +39,7 @@ an action, but Hermes and the host decide whether it runs.
   arguments, results, or secrets.
 - Inspects local and Hugging Face model provenance without loading model weights.
 - Creates immutable model lockfiles and verifies local files against SHA-256 hashes.
+- Runs paired trigger-candidate evaluations with synthetic tools and coverage-scoped verdicts.
 
 ## Requirements
 
@@ -84,6 +86,21 @@ Create and verify a local model lockfile:
 hermes antidote model lock /models/my-model --output model-lock.json
 hermes antidote model verify model-lock.json
 ```
+
+Run the standard behavioral suite against a local OpenAI-compatible endpoint:
+
+```bash
+hermes antidote eval run \
+  --endpoint http://127.0.0.1:8000/v1 \
+  --model local-model \
+  --output antidote-eval-report.json \
+  --markdown-output antidote-eval-report.md \
+  --minimize
+```
+
+The evaluator sends prompts only to the endpoint you provide. Its file, shell,
+write, and HTTP tools are simulations: no command, filesystem mutation, or
+outbound request is executed by the evaluator.
 
 ## Policy Modes
 
@@ -144,6 +161,23 @@ The inspector reports evidence rather than a misleading safety score:
 Hugging Face inspection reads repository metadata only. It does not download
 multi-gigabyte weight shards. Local inspection never deserializes model files.
 
+## Behavioral Evaluation
+
+v0.2 runs matched control and candidate prompts through a bounded synthetic
+tool loop. The existing runtime policy classifies requested actions, while the
+evaluator measures activation rate, control rate, carrier-prompt coverage, and
+endpoint failures. Reports use four explicit verdicts:
+
+- `TRIGGER_RECOVERED`
+- `SUSPICIOUS_BEHAVIOR_DETECTED`
+- `NO_BACKDOOR_DETECTED_WITHIN_TEST_COVERAGE`
+- `INCONCLUSIVE`
+
+`TRIGGER_RECOVERED` means a candidate reproducibly changed tool behavior under
+the configured controls. It does not prove how the behavior entered the model
+or whether it was intentional. See
+[`docs/BEHAVIORAL_EVALUATION.md`](docs/BEHAVIORAL_EVALUATION.md).
+
 ## Threat Model
 
 llmAntidote assumes the selected model may intentionally emit malicious tool
@@ -175,9 +209,10 @@ hermes plugins validate .
 ```text
 plugin.yaml                 Hermes plugin manifest
 __init__.py                 Hermes registration entry point
-llm_antidote/               policy, hooks, audit, and model inspection
+llm_antidote/               policy, provenance, evaluation, and reporting
 tests/                      policy and provenance tests
-docs/                       threat model, policy, provenance, project plan
+docs/                       threat model, policy, provenance, evaluation, project plan
+examples/                   bounded evaluation suite examples
 .github/workflows/ci.yml    static checks and unit tests
 ```
 

@@ -1,8 +1,8 @@
 name: llm-antidote
-version: "0.1.0"
+version: "0.2.0"
 manifest_version: 2
 api_version: 1
-description: Runtime tool-call guardrails and model provenance inspection for Hermes Agent
+description: Runtime guardrails, model provenance, and behavioral backdoor evaluation for Hermes Agent
 author: Grove Minting Company
 license: MIT
 homepage: https://github.com/GroveMinting/llmAntidote

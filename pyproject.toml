@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-antidote"
+version = "0.1.0"
+description = "Runtime guardrails and model provenance inspection for Hermes Agent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "Grove Minting Company"}]
+keywords = ["hermes-agent", "llm", "security", "model-provenance", "guardrails"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Security",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "ruff>=0.13,<0.15"]
+
+[project.urls]
+Homepage = "https://github.com/GroveMinting/llmAntidote"
+Issues = "https://github.com/GroveMinting/llmAntidote/issues"
+
+[tool.setuptools.packages.find]
+include = ["llm_antidote*"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

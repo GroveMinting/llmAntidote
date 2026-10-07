@@ -1,0 +1,24 @@
+name: Feature request
+description: Propose a guardrail or provenance capability
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Security problem
+      description: Describe the concrete threat or operator need.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: false_positives
+    attributes:
+      label: False-positive considerations
+    validations:
+      required: true

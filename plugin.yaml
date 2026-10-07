@@ -1,0 +1,31 @@
+name: llm-antidote
+version: "0.1.0"
+manifest_version: 2
+api_version: 1
+description: Runtime tool-call guardrails and model provenance inspection for Hermes Agent
+author: Grove Minting Company
+license: MIT
+homepage: https://github.com/GroveMinting/llmAntidote
+requires_hermes: ">=0.21.5"
+tags: [security, guardrails, provenance, local-models]
+provides_hooks:
+  - pre_tool_call
+  - post_tool_call
+  - pre_api_request
+  - on_session_start
+  - on_session_reset
+  - on_session_finalize
+config_schema:
+  mode:
+    type: str
+    choices: [balanced, strict, audit]
+    default: balanced
+    description: Balanced blocks known exfiltration and requests approval for ambiguous risk.
+  taint_ttl_minutes:
+    type: int
+    default: 60
+    description: Minutes that sensitive-read metadata remains active in a session.
+  audit_capacity:
+    type: int
+    default: 200
+    description: Maximum metadata-only decision records retained in memory.

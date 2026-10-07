@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a policy, provenance, or compatibility defect
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include secrets or private tool output. Use private vulnerability reporting for exploitable bypasses.
+  - type: input
+    id: version
+    attributes:
+      label: Versions
+      description: llmAntidote, Hermes Agent, and Python versions
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Runtime policy, Model provenance, Lockfile, Hermes integration, Documentation]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction
+      description: Use placeholder credentials and reserved domains such as example.invalid.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true

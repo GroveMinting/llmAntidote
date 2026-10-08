@@ -7,8 +7,9 @@
 [![Policy: Block + Approve](https://img.shields.io/badge/policy-block%20%2B%20approve-B42318)](docs/POLICY.md)
 [![Audit: Model Provenance](https://img.shields.io/badge/audit-model%20provenance-0A66C2)](docs/MODEL_PROVENANCE.md)
 [![Eval: Behavioral](https://img.shields.io/badge/eval-behavioral-2E7D32)](docs/BEHAVIORAL_EVALUATION.md)
+[![Fleet: Signed Admission](https://img.shields.io/badge/fleet-signed%20admission-7B1FA2)](docs/FLEET_ADMISSION.md)
 
-**Model provenance · tool-call interception · behavioral evaluation · fail-closed exfiltration defense**
+**Runtime guardrails · behavioral evaluation · signed attestations · fleet admission control**
 
 Inspect what you are running, constrain what it can access, and stop recognized
 credential-exfiltration chains before Hermes executes them.
@@ -40,6 +41,8 @@ an action, but Hermes and the host decide whether it runs.
 - Inspects local and Hugging Face model provenance without loading model weights.
 - Creates immutable model lockfiles and verifies local files against SHA-256 hashes.
 - Runs paired trigger-candidate evaluations with synthetic tools and coverage-scoped verdicts.
+- Enforces signed fleet policy over attestations, model locks, and evaluation evidence.
+- Produces signed PASS/DENY receipts and metadata-only fleet status reporting.
 
 ## Requirements
 
@@ -93,6 +96,7 @@ Run the standard behavioral suite against a local OpenAI-compatible endpoint:
 hermes antidote eval run \
   --endpoint http://127.0.0.1:8000/v1 \
   --model local-model \
+  --model-lock model-lock.json \
   --output antidote-eval-report.json \
   --markdown-output antidote-eval-report.md \
   --minimize
@@ -101,6 +105,88 @@ hermes antidote eval run \
 The evaluator sends prompts only to the endpoint you provide. Its file, shell,
 write, and HTTP tools are simulations: no command, filesystem mutation, or
 outbound request is executed by the evaluator.
+
+## Fleet Quick Start
+
+Generate separate Ed25519 keys for policy authority, evidence attestation, and
+online receipt signing, then initialize policy:
+
+```bash
+hermes antidote fleet keygen \
+  --private-key policy-private.pem \
+  --public-key policy-public.pem
+
+hermes antidote fleet keygen \
+  --private-key attestation-private.pem \
+  --public-key attestation-public.pem
+
+hermes antidote fleet keygen \
+  --private-key receipt-private.pem \
+  --public-key receipt-public.pem
+
+hermes antidote fleet policy init \
+  --name production \
+  --output fleet-policy.json
+
+hermes antidote fleet sign fleet-policy.json \
+  --private-key policy-private.pem \
+  --output fleet-policy.sig.json
+
+hermes antidote fleet policy validate fleet-policy.json
+```
+
+Record the printed policy SHA-256 in protected configuration. Admission requires
+that out-of-band value through `--trusted-policy-sha256`, preventing replay of
+an older policy signed by the same authority.
+
+Bind a model lock and behavioral report into an attestation:
+
+```bash
+hermes antidote fleet attest \
+  --subject model-lock.json \
+  --subject-name model-a \
+  --evidence antidote-eval-report.json \
+  --output model-a.attestation.json
+
+hermes antidote fleet sign model-a.attestation.json \
+  --private-key attestation-private.pem \
+  --output model-a.attestation.sig.json
+```
+
+Run the admission gate and issue a signed receipt:
+
+```bash
+hermes antidote fleet admit \
+  --policy fleet-policy.json \
+  --policy-signature fleet-policy.sig.json \
+  --policy-public-key policy-public.pem \
+  --trusted-policy-sha256 <trusted-policy-sha256> \
+  --attestation model-a.attestation.json \
+  --attestation-signature model-a.attestation.sig.json \
+  --attestation-public-key attestation-public.pem \
+  --evaluation-report antidote-eval-report.json \
+  --model-lock model-lock.json \
+  --receipt model-a.receipt.json \
+  --receipt-private-key receipt-private.pem \
+  --receipt-signature model-a.receipt.sig.json
+```
+
+Ingest the verified signed receipt into the metadata-only ledger:
+
+```bash
+hermes antidote fleet ledger ingest \
+  --database antidote-fleet.db \
+  --receipt model-a.receipt.json \
+  --signature model-a.receipt.sig.json \
+  --public-key receipt-public.pem
+
+hermes antidote fleet ledger summary --database antidote-fleet.db
+```
+
+See [`docs/FLEET_ADMISSION.md`](docs/FLEET_ADMISSION.md) before distributing
+keys or policy bundles. Policy and attestation private keys should normally
+remain offline. CI receives only their public keys plus a separately scoped
+receipt-signing key.
 
 ## Policy Modes
 
@@ -184,6 +270,15 @@ llmAntidote assumes the selected model may intentionally emit malicious tool
 calls. The Hermes host and this plugin remain trusted. See
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for boundaries and bypass risks.
 
+## Fleet Admission
+
+v3 adds a local control-plane contract for model promotion. Signed policies
+declare acceptable evaluation verdicts, suite identities, coverage, error rate,
+evidence age, and model-lock binding. Admission produces a signed receipt whose
+exit status is suitable for CI/CD gates. A metadata-only SQLite ledger accepts
+only signed receipts and reports PASS/DENY counts without ingesting prompts,
+tool arguments, credentials, or model output.
+
 ## Development
 
 ```bash
@@ -209,9 +304,9 @@ hermes plugins validate .
 ```text
 plugin.yaml                 Hermes plugin manifest
 __init__.py                 Hermes registration entry point
-llm_antidote/               policy, provenance, evaluation, and reporting
+llm_antidote/               runtime, evaluation, attestation, admission, fleet ledger
 tests/                      policy and provenance tests
-docs/                       threat model, policy, provenance, evaluation, project plan
+docs/                       threat model, policy, evaluation, fleet admission, project plan
 examples/                   bounded evaluation suite examples
 .github/workflows/ci.yml    static checks and unit tests
 ```

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented here.
 
+## 3.0.0 - 2026-10-07
+
+- Add Ed25519 key generation and detached canonical-JSON signatures.
+- Add evidence attestations binding model locks and evaluation reports.
+- Add strict, signable fleet policy bundles.
+- Add evidence-bound PASS/DENY admission receipts and signed receipt output.
+- Add metadata-only SQLite receipt ingestion and fleet status reporting.
+- Add CI/CD admission examples and fleet trust-model documentation.
+- Add the `hermes antidote fleet` command family.
+
 ## 0.2.0 - 2026-10-07
 
 - Add paired behavioral evaluation against explicit OpenAI-compatible endpoints.

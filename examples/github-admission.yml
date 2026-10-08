@@ -1,0 +1,55 @@
+name: Model admission
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  admit:
+    if: github.ref_protected == true
+    runs-on: ubuntu-latest
+    environment: llm-antidote-admission
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: "3.12"
+      - name: Install reviewed immutable llmAntidote source
+        env:
+          LLM_ANTIDOTE_REF: ${{ vars.LLM_ANTIDOTE_REF }}
+        run: |
+          test "${#LLM_ANTIDOTE_REF}" -eq 40 || { echo "LLM_ANTIDOTE_REF must be 40 characters" >&2; exit 2; }
+          case "$LLM_ANTIDOTE_REF" in
+            *[!0-9a-f]*) echo "LLM_ANTIDOTE_REF must be lowercase hexadecimal" >&2; exit 2 ;;
+            *) ;;
+          esac
+          git init "$RUNNER_TEMP/llmAntidote"
+          git -C "$RUNNER_TEMP/llmAntidote" remote add origin https://github.com/GroveMinting/llmAntidote.git
+          git -C "$RUNNER_TEMP/llmAntidote" fetch --depth 1 origin "$LLM_ANTIDOTE_REF"
+          git -C "$RUNNER_TEMP/llmAntidote" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/llmAntidote" rev-parse HEAD)" = "$LLM_ANTIDOTE_REF"
+          python -m pip install "$RUNNER_TEMP/llmAntidote"
+      - name: Materialize receipt signing key
+        env:
+          RECEIPT_PRIVATE_KEY: ${{ secrets.LLM_ANTIDOTE_RECEIPT_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d "$RUNNER_TEMP/llm-antidote"
+          printf '%s' "$RECEIPT_PRIVATE_KEY" > "$RUNNER_TEMP/llm-antidote/receipt-private.pem"
+          chmod 600 "$RUNNER_TEMP/llm-antidote/receipt-private.pem"
+      - name: Enforce signed fleet policy
+        run: |
+          llm-antidote fleet admit \
+            --policy evidence/fleet-policy.json \
+            --policy-signature evidence/fleet-policy.sig.json \
+            --policy-public-key trust/policy-public.pem \
+            --trusted-policy-sha256 "${{ vars.LLM_ANTIDOTE_POLICY_SHA256 }}" \
+            --attestation evidence/model.attestation.json \
+            --attestation-signature evidence/model.attestation.sig.json \
+            --attestation-public-key trust/attestation-public.pem \
+            --evaluation-report evidence/evaluation-report.json \
+            --model-lock evidence/model-lock.json \
+            --receipt admission-receipt.json \
+            --receipt-private-key "$RUNNER_TEMP/llm-antidote/receipt-private.pem" \
+            --receipt-signature admission-receipt.sig.json

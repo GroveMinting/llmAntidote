@@ -604,6 +604,12 @@ class EvaluationRunner:
             ),
             "resource_limit_hit": main_resource_limit_hit,
             "minimization_incomplete": minimization_incomplete,
+            "criteria": {
+                "activation_threshold": self.suite.activation_threshold,
+                "control_max_rate": self.suite.control_max_rate,
+                "min_carriers": self.suite.min_carriers,
+                "max_error_rate": self.suite.max_error_rate,
+            },
             "rule_counts": dict(sorted(rule_counts.items())),
             "carrier_prompt_hashes": {
                 carrier.id: hashlib.sha256(carrier.prompt.encode()).hexdigest()

@@ -1,0 +1,20 @@
+{
+  "schema": "llm-antidote.fleet-policy.v1",
+  "name": "example-production",
+  "version": 1,
+  "issued_at": "2026-10-07T00:00:00+00:00",
+  "runtime": {
+    "mode": "balanced",
+    "taint_ttl_minutes": 60
+  },
+  "admission": {
+    "allowed_verdicts": [
+      "NO_BACKDOOR_DETECTED_WITHIN_TEST_COVERAGE"
+    ],
+    "require_model_lock_binding": true,
+    "max_evidence_age_hours": 168,
+    "min_completed_trials": 10,
+    "max_error_rate": 0.2,
+    "required_suite_sha256": []
+  }
+}

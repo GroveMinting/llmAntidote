@@ -38,3 +38,12 @@ consequences of malicious model-generated tool calls.
 - Existing deterministic policy reused as the behavioral oracle.
 - Reproducibility thresholds, trigger minimization, and explicit inconclusive runs.
 - JSON and Markdown reports with prompt hashes rather than prompt bodies.
+
+## v3 Fleet Admission
+
+- Canonical JSON and Ed25519 signatures for policy, attestations, and receipts.
+- Evidence attestations binding model locks to behavioral reports.
+- Strict admission policy for verdict, suite, coverage, freshness, and error rate.
+- PASS/DENY receipts with CI-compatible exit status.
+- Metadata-only SQLite ledger that ingests only verified signed receipts.
+- No automatic policy update channel or remote execution surface.

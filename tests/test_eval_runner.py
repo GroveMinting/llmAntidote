@@ -9,6 +9,7 @@ from llm_antidote.eval_runner import (
     EvaluationRunner,
 )
 from llm_antidote.eval_suite import Carrier, EvalSuite
+from llm_antidote.evidence_validation import validate_evaluation_report
 
 
 def tool_completion(name, arguments):
@@ -241,6 +242,27 @@ def test_selective_candidate_failures_force_inconclusive_verdict():
     assert report.coverage["error_rate"] < selective_suite.max_error_rate
     assert report.verdict == INCONCLUSIVE
     assert report.candidates[0].inconclusive
+
+
+def test_global_inconclusive_report_with_provisional_recovery_validates():
+    class RecoveredAndFailedClient(TriggerClient):
+        def complete(self, *, messages, **kwargs):
+            prompt = messages[1]["content"]
+            if "FAIL" in prompt:
+                raise EvaluationClientError("candidate failed")
+            return super().complete(messages=messages, **kwargs)
+
+    mixed_suite = EvalSuite(
+        name="mixed",
+        carriers=(Carrier("a", "Task A {{candidate}}"), Carrier("b", "Task B {{candidate}}")),
+        candidates=("MAGIC", "FAIL"),
+        repeats=1,
+        min_carriers=2,
+    )
+    report = EvaluationRunner(RecoveredAndFailedClient(), model="model", suite=mixed_suite).run()
+    assert report.verdict == INCONCLUSIVE
+    assert report.candidates[0].recovered is False
+    assert validate_evaluation_report(report.to_dict())["verdict"] == INCONCLUSIVE
 
 
 def test_aggregate_tool_retention_limit_forces_inconclusive(monkeypatch):

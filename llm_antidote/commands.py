@@ -5,13 +5,27 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
+from .admission import admit_files
 from .eval_client import OpenAICompatClient
 from .eval_report import load_report, render_markdown, write_markdown, write_reports
 from .eval_runner import INCONCLUSIVE, NO_BACKDOOR_DETECTED, EvaluationRunner
 from .eval_suite import load_suite, with_overrides
+from .fleet_crypto import (
+    create_attestation,
+    ensure_distinct_paths,
+    generate_keypair,
+    path_identity,
+    sign_document,
+    sign_json_file,
+    verify_json_file,
+    write_json_document,
+)
+from .fleet_ledger import fleet_summary, ingest_receipt, list_receipts
+from .fleet_policy import default_policy, load_policy, policy_digest
 from .model_inspector import InspectionReport, inspect_model
 from .model_lock import create_lock, load_lock, verify_lock, write_lock
 
@@ -68,6 +82,79 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     replay.add_argument("--markdown-output", help="Write rendered Markdown instead of stdout")
     replay.set_defaults(antidote_handler="eval_replay")
 
+    fleet = subcommands.add_parser("fleet", help="Manage signed fleet admission artifacts")
+    fleet_commands = fleet.add_subparsers(dest="fleet_action", required=True)
+
+    keygen = fleet_commands.add_parser("keygen", help="Generate an Ed25519 keypair")
+    keygen.add_argument("--private-key", required=True, help="Private key PEM output")
+    keygen.add_argument("--public-key", required=True, help="Public key PEM output")
+    keygen.set_defaults(antidote_handler="fleet_keygen")
+
+    sign = fleet_commands.add_parser("sign", help="Sign a canonical JSON document")
+    sign.add_argument("document", help="JSON document to sign")
+    sign.add_argument("--private-key", required=True, help="Ed25519 private key PEM")
+    sign.add_argument("--output", required=True, help="Detached signature JSON output")
+    sign.set_defaults(antidote_handler="fleet_sign")
+
+    signature_verify = fleet_commands.add_parser("verify", help="Verify a detached signature")
+    signature_verify.add_argument("document", help="Signed JSON document")
+    signature_verify.add_argument("--signature", required=True, help="Signature JSON")
+    signature_verify.add_argument("--public-key", required=True, help="Ed25519 public key PEM")
+    signature_verify.set_defaults(antidote_handler="fleet_verify")
+
+    attest = fleet_commands.add_parser("attest", help="Create an evidence attestation")
+    attest.add_argument("--subject", required=True, help="Model lock or subject JSON")
+    attest.add_argument(
+        "--evidence", action="append", required=True, help="Evidence JSON; repeat as needed"
+    )
+    attest.add_argument("--subject-name", default="", help="Stable fleet subject name")
+    attest.add_argument("--output", required=True, help="Attestation JSON output")
+    attest.set_defaults(antidote_handler="fleet_attest")
+
+    policy = fleet_commands.add_parser("policy", help="Create or validate fleet policy")
+    policy_commands = policy.add_subparsers(dest="policy_action", required=True)
+    policy_init = policy_commands.add_parser("init", help="Create a default fleet policy")
+    policy_init.add_argument("--name", default="default-production", help="Policy name")
+    policy_init.add_argument("--output", required=True, help="Policy JSON output")
+    policy_init.set_defaults(antidote_handler="fleet_policy_init")
+    policy_validate = policy_commands.add_parser("validate", help="Validate fleet policy")
+    policy_validate.add_argument("policy", help="Fleet policy JSON")
+    policy_validate.set_defaults(antidote_handler="fleet_policy_validate")
+
+    admit = fleet_commands.add_parser("admit", help="Evaluate signed evidence against policy")
+    admit.add_argument("--policy", required=True)
+    admit.add_argument("--policy-signature", required=True)
+    admit.add_argument("--policy-public-key", required=True)
+    admit.add_argument("--trusted-policy-sha256", required=True)
+    admit.add_argument("--attestation", required=True)
+    admit.add_argument("--attestation-signature", required=True)
+    admit.add_argument("--attestation-public-key", required=True)
+    admit.add_argument("--evaluation-report", required=True)
+    admit.add_argument("--model-lock", required=True)
+    admit.add_argument("--receipt", required=True, help="Admission receipt JSON output")
+    admit.add_argument("--receipt-private-key", required=True)
+    admit.add_argument("--receipt-signature", required=True, help="Receipt signature JSON output")
+    admit.set_defaults(antidote_handler="fleet_admit")
+
+    ledger = fleet_commands.add_parser("ledger", help="Ingest and query signed receipts")
+    ledger_commands = ledger.add_subparsers(dest="ledger_action", required=True)
+    ledger_ingest = ledger_commands.add_parser("ingest", help="Ingest a signed receipt")
+    ledger_ingest.add_argument("--database", required=True)
+    ledger_ingest.add_argument("--receipt", required=True)
+    ledger_ingest.add_argument("--signature", required=True)
+    ledger_ingest.add_argument("--public-key", required=True)
+    ledger_ingest.set_defaults(antidote_handler="fleet_ledger_ingest")
+    ledger_list = ledger_commands.add_parser("list", help="List fleet receipts")
+    ledger_list.add_argument("--database", required=True)
+    ledger_list.add_argument("--limit", type=int, default=100)
+    ledger_list.add_argument("--decision", default="")
+    ledger_list.add_argument("--json", action="store_true", dest="as_json")
+    ledger_list.set_defaults(antidote_handler="fleet_ledger_list")
+    ledger_summary = ledger_commands.add_parser("summary", help="Show fleet receipt summary")
+    ledger_summary.add_argument("--database", required=True)
+    ledger_summary.add_argument("--json", action="store_true", dest="as_json")
+    ledger_summary.set_defaults(antidote_handler="fleet_ledger_summary")
+
 
 def format_report(report: InspectionReport) -> str:
     severities = {"high": 0, "medium": 0, "low": 0}
@@ -109,6 +196,20 @@ def _file_sha256(path: str | Path) -> str:
         while chunk := stream.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _terminal_text(value: Any, maximum: int = 256) -> str:
+    return "".join(
+        character if 32 <= ord(character) < 127 else "?" for character in str(value)[:maximum]
+    )
+
+
+def _protect_outputs(outputs: list[str], inputs: list[str]) -> None:
+    ensure_distinct_paths(*outputs)
+    output_paths = {path_identity(item) for item in outputs}
+    input_paths = {path_identity(item) for item in inputs}
+    if output_paths & input_paths:
+        raise ValueError("Output paths must not overwrite input artifacts or keys")
 
 
 def run_cli(args: argparse.Namespace, *, runtime: Any = None) -> int:
@@ -185,7 +286,100 @@ def run_cli(args: argparse.Namespace, *, runtime: Any = None) -> int:
             else:
                 print(rendered, end="")
             return 0
-    except (OSError, ValueError) as exc:
+        if handler == "fleet_keygen":
+            private_path, public_path, key_id = generate_keypair(args.private_key, args.public_key)
+            print(f"Private key: {private_path}")
+            print(f"Public key: {public_path}")
+            print(f"Key id: {key_id}")
+            return 0
+        if handler == "fleet_sign":
+            destination = sign_json_file(args.document, args.private_key, args.output)
+            print(f"Signature: {destination}")
+            return 0
+        if handler == "fleet_verify":
+            valid, reason = verify_json_file(args.document, args.signature, args.public_key)
+            print(f"{'PASS' if valid else 'FAIL'}: {reason}")
+            return 0 if valid else 1
+        if handler == "fleet_attest":
+            _protect_outputs([args.output], [args.subject, *args.evidence])
+            attestation = create_attestation(
+                args.subject,
+                args.evidence,
+                subject_name=args.subject_name,
+            )
+            destination = write_json_document(attestation, args.output)
+            print(f"Attestation: {destination}")
+            return 0
+        if handler == "fleet_policy_init":
+            destination = write_json_document(default_policy(args.name), args.output)
+            print(f"Policy: {destination}")
+            return 0
+        if handler == "fleet_policy_validate":
+            policy = load_policy(args.policy)
+            print(f"PASS: policy sha256 {policy_digest(policy)}")
+            return 0
+        if handler == "fleet_admit":
+            _protect_outputs(
+                [args.receipt, args.receipt_signature],
+                [
+                    args.policy,
+                    args.policy_signature,
+                    args.policy_public_key,
+                    args.attestation,
+                    args.attestation_signature,
+                    args.attestation_public_key,
+                    args.evaluation_report,
+                    args.model_lock,
+                    args.receipt_private_key,
+                ],
+            )
+            receipt = admit_files(
+                policy_path=args.policy,
+                policy_signature_path=args.policy_signature,
+                policy_public_key=args.policy_public_key,
+                trusted_policy_sha256=args.trusted_policy_sha256,
+                attestation_path=args.attestation,
+                attestation_signature_path=args.attestation_signature,
+                attestation_public_key=args.attestation_public_key,
+                evaluation_report_path=args.evaluation_report,
+                model_lock_path=args.model_lock,
+            )
+            signature = sign_document(receipt, args.receipt_private_key)
+            signature_path = write_json_document(signature, args.receipt_signature)
+            receipt_path = write_json_document(receipt, args.receipt)
+            print(f"Decision: {receipt['decision']}")
+            print(f"Receipt: {receipt_path}")
+            print(f"Receipt signature: {signature_path}")
+            return 0 if receipt["decision"] == "PASS" else 1
+        if handler == "fleet_ledger_ingest":
+            inserted = ingest_receipt(args.database, args.receipt, args.signature, args.public_key)
+            print("Ingested" if inserted else "Already present")
+            return 0
+        if handler == "fleet_ledger_list":
+            rows = list_receipts(args.database, limit=args.limit, decision=args.decision)
+            if args.as_json:
+                print(json.dumps(rows, indent=2, sort_keys=True))
+            else:
+                for row in rows:
+                    print(
+                        f"{_terminal_text(row['decision'])} "
+                        f"{_terminal_text(row['subject_name'])} "
+                        f"policy={_terminal_text(row['policy_name'])}@{row['policy_version']} "
+                        f"receipt={row['receipt_id'][:12]}"
+                    )
+            return 0
+        if handler == "fleet_ledger_summary":
+            summary = fleet_summary(args.database)
+            if args.as_json:
+                print(json.dumps(summary, indent=2, sort_keys=True))
+            else:
+                print(
+                    f"Receipts: {summary['receipts']} "
+                    f"PASS={summary['pass']} DENY={summary['deny']} "
+                    f"subjects={summary['subjects']}"
+                )
+            return 0
+    except (OSError, ValueError, sqlite3.Error) as exc:
         print(f"llmAntidote error: {exc}")
         return 2
     print("llmAntidote error: no command selected")

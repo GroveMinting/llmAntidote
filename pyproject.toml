@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-antidote"
-version = "0.2.0"
-description = "Runtime guardrails, model provenance, and behavioral evaluation for Hermes Agent"
+version = "3.0.0"
+description = "Runtime guardrails, behavioral evaluation, and signed fleet admission for Hermes Agent"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{name = "Grove Minting Company"}]
-keywords = ["hermes-agent", "llm", "security", "model-provenance", "guardrails"]
+keywords = ["hermes-agent", "llm", "security", "model-provenance", "guardrails", "fleet"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3",
@@ -18,6 +18,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Security",
 ]
+dependencies = ["cryptography>=42,<47"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "ruff>=0.13,<0.15"]
@@ -25,6 +26,9 @@ dev = ["pytest>=8,<9", "ruff>=0.13,<0.15"]
 [project.urls]
 Homepage = "https://github.com/GroveMinting/llmAntidote"
 Issues = "https://github.com/GroveMinting/llmAntidote/issues"
+
+[project.scripts]
+llm-antidote = "llm_antidote.standalone:main"
 
 [tool.setuptools.packages.find]
 include = ["llm_antidote*"]

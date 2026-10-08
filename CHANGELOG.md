@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented here.
 
-## 3.0.0 - 2026-10-07
+## 3.0.0 - 2026-10-08
 
 - Add Ed25519 key generation and detached canonical-JSON signatures.
 - Add evidence attestations binding model locks and evaluation reports.

@@ -10,12 +10,12 @@ potentially outbound so they cannot silently acquire unrestricted egress.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 CAPABILITY_CLASSIFIER_VERSION = "1"
 
 
-class ToolCapability(str, Enum):
+class ToolCapability(StrEnum):
     LOCAL_READ = "local_read"
     LOCAL_WRITE = "local_write"
     SHELL_EXEC = "shell_exec"

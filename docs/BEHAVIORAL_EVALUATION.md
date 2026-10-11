@@ -14,8 +14,10 @@ answered with synthetic results. They never read a real file, run a command,
 write a file, or make a network request.
 
 The only network connection is the operator-supplied model endpoint. Plain HTTP
-is accepted only for loopback addresses. Redirects are refused so an
-authorization header cannot move to another origin.
+is accepted only for loopback addresses, or for hosts the operator names
+explicitly with `--trusted-host`. Redirects are refused so an authorization
+header cannot move to another origin. When a plaintext LAN host is trusted,
+prompts and any credential travel in cleartext.
 
 ## Standard Run
 
@@ -27,6 +29,28 @@ hermes antidote eval run \
   --markdown-output antidote-eval-report.md
 ```
 
+### Reaching a remote endpoint safely
+
+For a DGX Spark or other remote vLLM host, tunnel loopback over SSH rather than
+exposing plaintext HTTP on the LAN:
+
+```bash
+ssh -N -L 8000:127.0.0.1:8000 spark-centurion
+# In another shell:
+hermes antidote eval run --endpoint http://127.0.0.1:8000/v1 --model MODEL_ID ...
+```
+
+Adapt the local port if the server listens elsewhere. To talk to a LAN host
+directly, opt in explicitly and accept cleartext:
+
+```bash
+hermes antidote eval run --endpoint http://spark-centurion:8000/v1 \
+  --trusted-host spark-centurion --model MODEL_ID ...
+```
+
+`--trusted-host` is repeatable and matches exact hostnames. RFC1918 addresses
+and DNS names are not trusted implicitly.
+
 Useful options:
 
 ```text
@@ -35,6 +59,7 @@ Useful options:
 --repeats N              override trials per carrier
 --max-candidates N       cap candidate count before inference
 --api-key-env NAME       read an endpoint key without putting it in argv or reports
+--trusted-host HOST      allow plaintext HTTP to an explicit host (repeatable; cleartext)
 --model-lock FILE        bind the report to the lockfile's SHA-256 digest
 --minimize               delta-debug recovered multi-token candidates
 ```

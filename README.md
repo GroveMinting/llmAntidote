@@ -33,15 +33,21 @@ an action, but Hermes and the host decide whether it runs.
 
 - Blocks commands that combine sensitive reads with network transmission.
 - Blocks recognizable download-and-execute and reverse-shell patterns.
+- Classifies tools by capability, not only argument text; send/upload connectors
+  and unknown plugin tools are treated as egress-capable.
+- Requires approval for reads outside operator-configured safe roots, including
+  unlisted secret filenames such as `token.json`.
 - Routes ambiguous sensitive access through Hermes' human approval flow.
 - Tracks approved sensitive reads as session-scoped taint metadata.
-- Blocks outbound-capable calls from tainted sessions.
+- Reserves pending sensitive access so outbound calls cannot run before a read resolves.
+- Blocks outbound-capable calls from tainted or pending sessions.
 - Records rule IDs, fixed tool families, and decisions without raw tool names,
   arguments, results, or secrets.
 - Inspects local and Hugging Face model provenance without loading model weights.
 - Creates immutable model lockfiles and verifies local files against SHA-256 hashes.
 - Runs paired trigger-candidate evaluations with synthetic tools and coverage-scoped verdicts.
 - Enforces signed fleet policy over attestations, model locks, and evaluation evidence.
+- Enforces signed runtime admission and blocks tool calls on model-route mismatch.
 - Produces signed PASS/DENY receipts and metadata-only fleet status reporting.
 
 ## Requirements
@@ -105,6 +111,17 @@ hermes antidote eval run \
 The evaluator sends prompts only to the endpoint you provide. Its file, shell,
 write, and HTTP tools are simulations: no command, filesystem mutation, or
 outbound request is executed by the evaluator.
+
+To reach a remote vLLM host such as a DGX Spark, tunnel loopback over SSH rather
+than exposing plaintext HTTP on the LAN:
+
+```bash
+ssh -N -L 8000:127.0.0.1:8000 spark-centurion
+hermes antidote eval run --endpoint http://127.0.0.1:8000/v1 --model MODEL_ID ...
+```
+
+See [`docs/BEHAVIORAL_EVALUATION.md`](docs/BEHAVIORAL_EVALUATION.md) for the
+explicit `--trusted-host` opt-in and its cleartext tradeoff.
 
 ## Fleet Quick Start
 
@@ -207,7 +224,24 @@ plugins:
         mode: balanced
         taint_ttl_minutes: 60
         audit_capacity: 200
+        safe_read_roots: /home/agent/workspace
+        sensitive_roots: /home/agent/.config
 ```
+
+Reads inside `safe_read_roots` are ordinary unless the name matches a known
+secret pattern; reads outside every safe root require approval. See
+[`docs/POLICY.md`](docs/POLICY.md) for capability classification, outbound
+allow-listing, and the pending-sensitive-access state machine.
+
+## Enforced Fleet Runtime
+
+Admission is not only a CI gate. Set `admission_enforcement: enforced` with a
+signed policy and a verified model binding and the plugin will refuse to
+register unless both verify. The signed policy's runtime mode and taint TTL
+become authoritative, and tool calls are blocked if the served model route stops
+matching the admitted model. Use `llm-antidote fleet runtime-verify --settings
+SETTINGS.json` as an external supervisor/startup probe. See
+[`docs/FLEET_ADMISSION.md`](docs/FLEET_ADMISSION.md).
 
 ## Decision Flow
 
@@ -219,14 +253,18 @@ pre_tool_call policy
         |
         +-- known exfiltration or payload execution --> block
         |
-        +-- ambiguous sensitive operation -----------> Hermes approval
+        +-- tainted or pending session egress ---------> block
+        |
+        +-- ambiguous sensitive or outbound ----------> Hermes approval
+        |                                               (+ pending reservation)
         |
         +-- ordinary operation ----------------------> allow
         |
         v
 post_tool_call metadata update
         |
-        +-- successful sensitive read ---------------> taint session
+        +-- successful sensitive access -------------> taint session
+        +-- denial, error, timeout ------------------> release pending
         +-- no sensitive result ----------------------> no taint
 ```
 
@@ -282,15 +320,16 @@ tool arguments, credentials, or model output.
 ## Development
 
 ```bash
-python -m pip install -e '.[dev]'
+python -m pip install -e .
+python -m pip install -r requirements-dev.txt
 pytest
 ruff check .
 ```
 
-The editable install above is for development dependencies only. llmAntidote
-is distributed as a Hermes directory plugin through `hermes plugins install`;
-it does not expose a pip plugin entry point that could bypass the manifest's
-Hermes version requirement.
+Development tooling lives in `requirements-dev.txt`, not a `[project.optional-dependencies]`
+extra: Hermes resolves directory plugins with `--all-extras`, so a `dev` extra
+would be installed into the host environment and can conflict with Hermes' own
+pinned tooling.
 
 When Hermes is installed locally, also run:
 
@@ -304,7 +343,7 @@ hermes plugins validate .
 ```text
 plugin.yaml                 Hermes plugin manifest
 __init__.py                 Hermes registration entry point
-llm_antidote/               runtime, evaluation, attestation, admission, fleet ledger
+llm_antidote/               capability policy, runtime, evaluation, admission, deployment, ledger
 tests/                      policy and provenance tests
 docs/                       threat model, policy, evaluation, fleet admission, project plan
 examples/                   bounded evaluation suite examples

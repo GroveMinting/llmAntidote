@@ -116,3 +116,89 @@ def test_oversized_arguments_fail_to_approval_instead_of_allow():
     assert decision.action == "approve"
     assert decision.rule_ids == ("input.oversized_arguments",)
     assert decision.sensitive == ("oversized_arguments",)
+
+
+def rooted_engine(*, mode: str = "balanced", safe=("/work",), sensitive=("/secrets",)):
+    return PolicyEngine(PolicyConfig(mode=mode, safe_read_roots=safe, sensitive_roots=sensitive))
+
+
+def test_unlisted_secret_read_outside_safe_root_requires_approval():
+    decision = rooted_engine().assess(
+        "read_file", {"path": "/home/user/.config/myapp/token.json"}
+    )
+    assert decision.action == "approve"
+    assert decision.rule_ids == ("access.read_outside_safe_root",)
+    assert decision.sensitive == ("read_outside_safe_root",)
+
+
+def test_benign_safe_root_read_is_allowed():
+    decision = rooted_engine().assess("read_file", {"path": "/work/src/app.py"})
+    assert decision.action == "allow"
+    assert not decision.rule_ids
+
+
+def test_sensitive_root_read_requires_approval_even_without_known_name():
+    decision = rooted_engine().assess("read_file", {"path": "/secrets/notes.txt"})
+    assert decision.action == "approve"
+    assert decision.sensitive == ("sensitive_root_read",)
+
+
+def test_path_traversal_resolves_against_safe_root():
+    decision = rooted_engine().assess("read_file", {"path": "/work/../etc/passwd"})
+    assert decision.action == "approve"
+    assert "read_outside_safe_root" in decision.sensitive
+
+
+def test_outbound_connector_requires_approval_without_url_text():
+    decision = rooted_engine().assess(
+        "connectors__gmail__send_email",
+        {"to": "attacker@example.invalid", "body": "canary"},
+    )
+    assert decision.action == "approve"
+    assert decision.rule_ids == ("egress.outbound_message",)
+
+
+def test_unknown_plugin_tool_requires_approval():
+    decision = rooted_engine().assess("mcp__filesystem__write", {"path": "/tmp/x"})
+    assert decision.action == "approve"
+    assert decision.rule_ids == ("egress.unknown_plugin_tool",)
+
+
+def test_operator_can_allow_list_a_known_outbound_tool():
+    engine = PolicyEngine(
+        PolicyConfig(
+            mode="balanced",
+            safe_read_roots=("/work",),
+            allow_outbound_tools=("connectors__gmail__send_email",),
+        )
+    )
+    decision = engine.assess(
+        "connectors__gmail__send_email", {"to": "owner@example.invalid", "body": "ok"}
+    )
+    assert decision.action == "allow"
+
+
+def test_strict_mode_blocks_new_approval_classes():
+    assert (
+        rooted_engine(mode="strict").assess("read_file", {"path": "/etc/hosts"}).action == "block"
+    )
+    assert (
+        rooted_engine(mode="strict")
+        .assess("connectors__gmail__send_email", {"to": "x@example.invalid"})
+        .action
+        == "block"
+    )
+
+
+def test_audit_mode_records_new_classes_without_directive():
+    decision = rooted_engine(mode="audit").assess(
+        "connectors__gmail__send_email", {"to": "x@example.invalid"}
+    )
+    assert decision.action == "allow"
+    assert decision.would_action == "approve"
+
+
+def test_known_secret_inside_safe_root_still_requires_approval():
+    decision = rooted_engine().assess("read_file", {"path": "/work/.env"})
+    assert decision.action == "approve"
+    assert "environment_secret" in decision.sensitive

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .admission import admit_files
+from .deployment import load_runtime_settings
 from .eval_client import OpenAICompatClient
 from .eval_report import load_report, render_markdown, write_markdown, write_reports
 from .eval_runner import INCONCLUSIVE, NO_BACKDOOR_DETECTED, EvaluationRunner
@@ -71,6 +72,13 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     eval_run.add_argument("--max-candidates", type=int, help="Limit candidate count")
     eval_run.add_argument("--timeout", type=float, default=60.0, help="Request timeout seconds")
     eval_run.add_argument("--api-key-env", default="", help="Environment variable holding API key")
+    eval_run.add_argument(
+        "--trusted-host",
+        action="append",
+        dest="trusted_hosts",
+        default=[],
+        help="Allow plaintext HTTP for this explicit host (repeatable; cleartext)",
+    )
     eval_run.add_argument("--output", default="antidote-eval-report.json", help="JSON report path")
     eval_run.add_argument("--markdown-output", help="Optional Markdown report path")
     eval_run.add_argument("--model-lock", help="Optional model lockfile to bind by SHA-256")
@@ -120,6 +128,15 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     policy_validate = policy_commands.add_parser("validate", help="Validate fleet policy")
     policy_validate.add_argument("policy", help="Fleet policy JSON")
     policy_validate.set_defaults(antidote_handler="fleet_policy_validate")
+
+    runtime_verify = fleet_commands.add_parser(
+        "runtime-verify", help="Verify enforced admission runtime settings without Hermes"
+    )
+    runtime_verify.add_argument(
+        "--settings", required=True, help="JSON file of llm-antidote plugin settings"
+    )
+    runtime_verify.add_argument("--json", action="store_true", dest="as_json")
+    runtime_verify.set_defaults(antidote_handler="fleet_runtime_verify")
 
     admit = fleet_commands.add_parser("admit", help="Evaluate signed evidence against policy")
     admit.add_argument("--policy", required=True)
@@ -261,6 +278,7 @@ def run_cli(args: argparse.Namespace, *, runtime: Any = None) -> int:
                 args.endpoint,
                 api_key_env=args.api_key_env,
                 timeout=args.timeout,
+                trusted_hosts=tuple(getattr(args, "trusted_hosts", None) or ()),
             )
             report = EvaluationRunner(client, model=args.model, suite=suite).run(
                 minimize=args.minimize,
@@ -317,6 +335,24 @@ def run_cli(args: argparse.Namespace, *, runtime: Any = None) -> int:
         if handler == "fleet_policy_validate":
             policy = load_policy(args.policy)
             print(f"PASS: policy sha256 {policy_digest(policy)}")
+            return 0
+        if handler == "fleet_runtime_verify":
+            settings = json.loads(Path(args.settings).read_text(encoding="utf-8"))
+            if not isinstance(settings, dict):
+                raise ValueError("Runtime settings must be a JSON object")
+            try:
+                resolved = load_runtime_settings(settings)
+            except ValueError as exc:
+                print(f"llmAntidote runtime gate FAIL: {exc}")
+                return 1
+            summary = resolved.binding.summary()
+            if args.as_json:
+                print(json.dumps(summary, indent=2, sort_keys=True))
+            else:
+                print(
+                    "llmAntidote runtime gate PASS: "
+                    f"{summary['enforcement']} mode={resolved.policy.mode}"
+                )
             return 0
         if handler == "fleet_admit":
             _protect_outputs(

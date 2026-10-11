@@ -222,7 +222,7 @@ class HuggingFaceClient:
         repo_path = urllib.parse.quote(repo, safe="/")
         revision_path = urllib.parse.quote(revision, safe="")
         url = f"https://huggingface.co/api/models/{repo_path}/revision/{revision_path}"
-        request = urllib.request.Request(url, headers={"User-Agent": "llmAntidote/0.1.0"})
+        request = urllib.request.Request(url, headers={"User-Agent": "llmAntidote/3.1.0"})
         try:
             response = self._opener(request, timeout=20)
             payload = response.read(_MAX_REMOTE_METADATA_BYTES + 1)

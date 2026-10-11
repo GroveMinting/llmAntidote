@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-antidote"
-version = "3.0.0"
+version = "3.1.0"
 description = "Runtime guardrails, behavioral evaluation, and signed fleet admission for Hermes Agent"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,10 +18,12 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Security",
 ]
-dependencies = ["cryptography>=42,<47"]
+dependencies = ["cryptography>=42"]
 
-[project.optional-dependencies]
-dev = ["pytest>=8,<9", "ruff>=0.13,<0.15"]
+# Development tooling is intentionally NOT a [project.optional-dependencies] extra.
+# Hermes installs directory plugins into a uv workspace and resolves it with
+# `--all-extras`, which would fold a `dev` extra into the host environment and
+# conflict with Hermes' own pinned test tooling. Use requirements-dev.txt.
 
 [project.urls]
 Homepage = "https://github.com/GroveMinting/llmAntidote"

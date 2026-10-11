@@ -11,6 +11,52 @@ def test_session_taint_expires():
     assert not store.is_tainted("session-a")
 
 
+def test_pending_reservation_lifecycle():
+    store = SessionRiskStore()
+    assert not store.has_pending("session-a")
+    store.reserve_pending(("session-a",))
+    assert store.has_pending("session-a")
+    store.release_pending(("session-a",))
+    assert not store.has_pending("session-a")
+
+
+def test_concurrent_pending_reservations_are_counted():
+    store = SessionRiskStore()
+    store.reserve_pending(("session-a",))
+    store.reserve_pending(("session-a",))
+    store.release_pending(("session-a",))
+    assert store.has_pending("session-a")
+    store.release_pending(("session-a",))
+    assert not store.has_pending("session-a")
+
+
+def test_pending_expires_with_ttl():
+    now = [0.0]
+    store = SessionRiskStore(ttl_minutes=1, clock=lambda: now[0])
+    store.reserve_pending(("session-a",))
+    assert store.has_pending("session-a")
+    now[0] = 61.0
+    assert not store.has_pending("session-a")
+
+
+def test_pending_and_taint_share_session_aliases():
+    store = SessionRiskStore()
+    store.reserve_pending(("session-a", "task-a"))
+    assert store.has_pending("task-a")
+    store.mark_many(("session-a", "task-a"), ("read_outside_safe_root",))
+    store.release_pending(("session-a",))
+    assert not store.has_pending("task-a")
+    assert store.is_tainted("task-a")
+
+
+def test_clear_removes_pending_state():
+    store = SessionRiskStore()
+    store.reserve_pending(("session-a",))
+    store.clear("session-a")
+    assert not store.has_pending("session-a")
+
+
+
 def test_session_taint_is_isolated_and_clearable():
     store = SessionRiskStore()
     store.mark("session-a", ("credential_file",))

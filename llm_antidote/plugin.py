@@ -8,17 +8,43 @@ from typing import Any
 
 from .audit import MetadataAudit
 from .commands import run_cli, setup_cli
-from .policy import PolicyConfig, PolicyDecision, PolicyEngine
+from .deployment import RuntimePolicyBinding, load_runtime_settings
+from .policy import PolicyDecision, PolicyEngine
 from .runtime import RuntimeRoutes
 from .state import SessionRiskStore
 
+_MISSING = object()
+_SETTING_KEYS = (
+    "mode",
+    "taint_ttl_minutes",
+    "audit_capacity",
+    "safe_read_roots",
+    "sensitive_roots",
+    "allow_outbound_tools",
+    "admission_enforcement",
+    "admission_policy_path",
+    "admission_policy_signature_path",
+    "admission_policy_public_key",
+    "admission_trusted_policy_sha256",
+    "admission_require_model_binding",
+    "admission_model_lock_path",
+    "admission_model_source",
+    "admission_model_name",
+)
+_NON_RESERVING_CATEGORIES = {"oversized_arguments"}
+_SETTING_DEFAULTS = {
+    "mode": "balanced",
+    "taint_ttl_minutes": "60",
+    "audit_capacity": "200",
+    "admission_require_model_binding": "true",
+}
 
-def _positive_int(value: Any, default: int, maximum: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(1, min(parsed, maximum))
+
+def _changed_from_default(key: str, value: Any) -> bool:
+    default = _SETTING_DEFAULTS.get(key)
+    if default is None:
+        return True
+    return str(value).strip().lower() != default
 
 
 def _tool_succeeded(status: Any, error_type: Any, result: Any) -> bool:
@@ -39,6 +65,22 @@ def _tool_succeeded(status: Any, error_type: Any, result: Any) -> bool:
     return True
 
 
+def _read_settings(ctx: Any) -> dict[str, Any]:
+    settings: dict[str, Any] = {}
+    for key in _SETTING_KEYS:
+        value = ctx.get_config(key, _MISSING)
+        if value is _MISSING or value is None or value == "":
+            continue
+        if not _changed_from_default(key, value):
+            continue
+        settings[key] = value
+    return settings
+
+
+def _reserves_access(decision: PolicyDecision) -> bool:
+    return bool(set(decision.sensitive) - _NON_RESERVING_CATEGORIES)
+
+
 @dataclass
 class AntidoteRuntime:
     mode: str
@@ -46,10 +88,19 @@ class AntidoteRuntime:
     risks: SessionRiskStore
     audit: MetadataAudit
     routes: RuntimeRoutes
+    binding: RuntimePolicyBinding
 
     def session_keys(self, session_id: str = "", task_id: str = "") -> tuple[str, ...]:
         keys = tuple(dict.fromkeys(value for value in (session_id, task_id) if value))
         return keys or ("unknown",)
+
+    def route_admitted(self) -> bool:
+        if not self.binding.enforced or not self.binding.model_name:
+            return True
+        observed = str(self.routes.snapshot().get("model") or "")
+        if not observed:
+            return True
+        return observed == self.binding.model_name
 
     def decide(
         self,
@@ -61,10 +112,30 @@ class AntidoteRuntime:
     ) -> PolicyDecision:
         keys = self.session_keys(session_id, task_id)
         self.risks.link(keys)
+        if not self.route_admitted():
+            decision = PolicyDecision(
+                action="block",
+                would_action="block",
+                rule_ids=("admission.model_route_mismatch",),
+                message=(
+                    "llmAntidote blocked a tool call because the served model does not match the "
+                    "admitted model route."
+                ),
+            )
+            self.audit.record(
+                action=decision.action,
+                would_action=decision.would_action,
+                tool_name=tool_name,
+                rule_ids=decision.rule_ids,
+                session_key=keys[0],
+            )
+            return decision
+        session_tainted = any(self.risks.is_tainted(key) for key in keys)
+        pending = any(self.risks.has_pending(key) for key in keys)
         decision = self.engine.assess(
             tool_name,
             args,
-            session_tainted=any(self.risks.is_tainted(key) for key in keys),
+            session_tainted=session_tainted or pending,
         )
         if decision.would_action != "allow":
             self.audit.record(
@@ -74,6 +145,12 @@ class AntidoteRuntime:
                 rule_ids=decision.rule_ids,
                 session_key=keys[0],
             )
+        if (
+            self.mode != "audit"
+            and decision.action != "block"
+            and _reserves_access(decision)
+        ):
+            self.risks.reserve_pending(keys)
         return decision
 
     def post_tool(
@@ -87,11 +164,25 @@ class AntidoteRuntime:
         session_id: str = "",
         task_id: str = "",
     ) -> None:
+        keys = self.session_keys(session_id, task_id)
         if not _tool_succeeded(status, error_type, result):
+            self.risks.release_pending(keys)
             return
         decision = self.engine.assess(tool_name, args, session_tainted=False)
+        self.risks.release_pending(keys)
         if decision.sensitive:
-            self.risks.mark_many(self.session_keys(session_id, task_id), decision.sensitive)
+            self.risks.mark_many(keys, decision.sensitive)
+
+    def observe_route(self, *, provider: Any = "", model: Any = "", base_url: Any = "") -> None:
+        self.routes.observe(provider=provider, model=model, base_url=base_url)
+        if self.binding.enforced and not self.route_admitted():
+            self.audit.record(
+                action="block",
+                would_action="block",
+                tool_name="pre_api_request",
+                rule_ids=("admission.model_route_mismatch",),
+                session_key="route",
+            )
 
     def status(self) -> dict[str, object]:
         return {
@@ -99,6 +190,8 @@ class AntidoteRuntime:
             "risk": self.risks.summary(),
             "audit": self.audit.summary(),
             "runtime_route": self.routes.snapshot(),
+            "admission": self.binding.summary(),
+            "route_admitted": self.route_admitted(),
         }
 
     def status_text(self) -> str:
@@ -106,14 +199,33 @@ class AntidoteRuntime:
         risk = status["risk"]
         audit = status["audit"]
         route = status["runtime_route"]
-        assert isinstance(risk, dict) and isinstance(audit, dict) and isinstance(route, dict)
+        admission = status["admission"]
+        assert (
+            isinstance(risk, dict)
+            and isinstance(audit, dict)
+            and isinstance(route, dict)
+            and isinstance(admission, dict)
+        )
         categories = ", ".join(risk.get("categories", [])) or "none"
         model = route.get("model") or "not observed"
         provider = route.get("provider") or "not observed"
+        policy = admission.get("policy") if isinstance(admission.get("policy"), dict) else {}
+        policy_line = "standalone (unsigned local settings)"
+        if admission.get("enforcement") == "enforced":
+            policy_line = (
+                f"{policy.get('name', '')}@{policy.get('version', 0)} "
+                f"{str(policy.get('sha256', ''))[:12]}"
+            )
+        admitted = admission.get("admitted_model") or "not bound"
         return (
             "llmAntidote status\n"
+            f"- enforcement: {admission.get('enforcement', 'standalone')}\n"
             f"- mode: {self.mode}\n"
+            f"- policy: {policy_line}\n"
+            f"- admitted model: {admitted}\n"
+            f"- route admitted: {status.get('route_admitted')}\n"
             f"- tainted sessions: {risk.get('tainted_sessions', 0)}\n"
+            f"- pending sensitive access: {risk.get('pending_sessions', 0)}\n"
             f"- taint categories: {categories}\n"
             f"- retained audit events: {audit.get('retained_events', 0)}\n"
             f"- latest model route: {provider} / {model}"
@@ -121,15 +233,14 @@ class AntidoteRuntime:
 
 
 def build_runtime(ctx: Any) -> AntidoteRuntime:
-    mode = PolicyConfig.from_value(ctx.get_config("mode", "balanced")).mode
-    ttl = _positive_int(ctx.get_config("taint_ttl_minutes", 60), 60, 24 * 60)
-    capacity = _positive_int(ctx.get_config("audit_capacity", 200), 200, 10_000)
+    resolved = load_runtime_settings(_read_settings(ctx))
     return AntidoteRuntime(
-        mode=mode,
-        engine=PolicyEngine(PolicyConfig(mode)),
-        risks=SessionRiskStore(ttl),
-        audit=MetadataAudit(capacity),
+        mode=resolved.policy.mode,
+        engine=PolicyEngine(resolved.policy),
+        risks=SessionRiskStore(resolved.taint_ttl_minutes),
+        audit=MetadataAudit(resolved.audit_capacity),
         routes=RuntimeRoutes(),
+        binding=resolved.binding,
     )
 
 
@@ -186,7 +297,7 @@ def register(ctx: Any) -> None:
         base_url: Any = "",
         **_: Any,
     ) -> None:
-        runtime.routes.observe(provider=provider, model=model, base_url=base_url)
+        runtime.observe_route(provider=provider, model=model, base_url=base_url)
 
     def on_session_start(session_id: str = "", **_: Any) -> None:
         runtime.risks.clear(session_id)

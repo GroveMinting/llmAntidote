@@ -395,6 +395,34 @@ Pattern-based command analysis is not a shell interpreter and can be bypassed
 through sufficiently novel indirection. Run untrusted models with real secret
 separation, a container or microVM, and deny-by-default egress.
 
+## Disclosure
+
+What this plugin does that a user should know before installing:
+
+- **Network calls.** The runtime hooks make **no** network calls. The optional
+  evaluation CLI (`hermes antidote eval run`, `llm-antidote eval run`) sends
+  synthetic prompts to an OpenAI-compatible endpoint you specify; `model inspect`
+  with an `hf:` source fetches metadata and file listings from Hugging Face.
+- **Reads outside the plugin's own data.** At runtime the policy engine reads
+  tool-call arguments in memory only, and never persists or logs them. The CLI
+  reads the files you point it at: model directories, signed policy / lock /
+  attestation / evaluation files, and the ledger database.
+- **Credentials.** `fleet keygen` writes unencrypted Ed25519 PKCS#8 private keys
+  to operator-chosen paths (mode `0600`); keep them offline. The evaluation CLI
+  reads its API key through Hermes' secret scope (`agent.secret_scope.get_secret`)
+  when running inside Hermes, and through the named environment variable in the
+  standalone entry point. The runtime hooks never read secrets, `.env`, or
+  `auth.json`.
+- **Storage.** Admission receipts and the fleet ledger live in a local SQLite
+  database at the path you choose.
+- **No** shell commands, subprocesses, background processes, or telemetry.
+
+The catalog security scan reports three `caution` findings
+(`dump_all_env` and `sudo_usage`) that point at the detection regexes in
+`llm_antidote/policy.py` (patterns that *recognize* `printenv`/`env` and `sudo`
+in a model's tool call). They are matchers, not behavior; the plugin never dumps
+the environment or runs `sudo`.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE). Research, Hermes

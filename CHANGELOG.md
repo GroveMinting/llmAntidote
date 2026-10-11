@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented here.
 
+## 3.2.2 - 2026-10-11
+
+- Fix a taint-bypass egress channel: `text_to_speech` was classified as a local
+  write, so a tainted session did not block it and its `text` payload was exempted
+  from scanning and the oversized gate as a content key. It is now classified as
+  an outbound-network capability (the built-in TTS providers are remote; only a
+  user `command` provider is local), so it is scanned in full, size-gated, and
+  blocked by session taint like other outbound tools.
+- Limit the content-key (`content`/`text`/`patch`/...) exemption to the file-write
+  tools (`write_file`/`patch`/`apply_patch`) instead of every local-write
+  capability, so other local-write payloads are no longer silently unscanned and
+  uncapped.
+- Bump the capability classifier version to `3`.
+
 ## 3.2.1 - 2026-10-11
 
 Follow-up corrections to the 3.2.0 hardening pass.

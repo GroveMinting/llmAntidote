@@ -13,6 +13,9 @@ All notable changes to this project will be documented here.
 - Block tool calls when the served model route does not match the admitted model.
 - Add `fleet runtime-verify` for an external startup/supervisor health probe.
 - Allow explicit `--trusted-host` plaintext HTTP evaluation endpoints with cleartext warnings.
+- Move development tooling to `requirements-dev.txt`; the previous `[dev]` extra
+  was folded into Hermes' `--all-extras` install and conflicted with its pinned pytest.
+- Relax the `cryptography` pin so the plugin co-installs with the version Hermes ships.
 - Document residual batch-ordering, restart, and serving-integration limits.
 
 ## 3.0.0 - 2026-10-08

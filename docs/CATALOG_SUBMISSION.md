@@ -29,7 +29,7 @@ tagged `v3.2.3` commit) and keep `version` in step with it.
 ```yaml
 name: llm-antidote
 repo: https://github.com/GroveMinting/llmAntidote
-sha: "<40-hex commit sha of the submitted release>"
+sha: "2070999bcb0eeada738d4419722815fe17e5a033"
 description: Runtime guardrails, behavioral evaluation, and signed fleet admission for Hermes Agent.
 maintainer: GroveMinting
 tier: community

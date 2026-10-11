@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from .audit import MetadataAudit
 from .commands import run_cli, setup_cli
@@ -243,20 +243,15 @@ class AntidoteRuntime:
 
     def status_text(self) -> str:
         status = self.status()
-        risk = status["risk"]
-        audit = status["audit"]
-        route = status["runtime_route"]
-        admission = status["admission"]
-        assert (
-            isinstance(risk, dict)
-            and isinstance(audit, dict)
-            and isinstance(route, dict)
-            and isinstance(admission, dict)
-        )
+        risk = cast(dict[str, Any], status["risk"])
+        audit = cast(dict[str, Any], status["audit"])
+        route = cast(dict[str, Any], status["runtime_route"])
+        admission = cast(dict[str, Any], status["admission"])
         categories = ", ".join(risk.get("categories", [])) or "none"
         model = route.get("model") or "not observed"
         provider = route.get("provider") or "not observed"
-        policy = admission.get("policy") if isinstance(admission.get("policy"), dict) else {}
+        raw_policy = admission.get("policy")
+        policy: dict[str, Any] = raw_policy if isinstance(raw_policy, dict) else {}
         policy_line = "standalone (unsigned local settings)"
         if admission.get("enforcement") == "enforced":
             policy_line = (

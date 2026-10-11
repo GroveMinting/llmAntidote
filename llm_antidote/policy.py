@@ -6,7 +6,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from .capabilities import ToolCapability, classify_tool, is_taint_safe_tool
 
@@ -132,20 +132,22 @@ def _argument_text(
     """
     pieces: list[str] = []
     seen: set[int] = set()
-    state = {"total": 0, "exceeded": False}
+    total = 0
+    exceeded = False
 
     def add(piece: str) -> None:
-        if state["exceeded"]:
+        nonlocal total, exceeded
+        if exceeded:
             return
-        remaining = limit - state["total"]
+        remaining = limit - total
         if len(piece) > remaining:
             if remaining > 0:
                 pieces.append(piece[:remaining])
-            state["total"] = limit
-            state["exceeded"] = True
+            total = limit
+            exceeded = True
             return
         pieces.append(piece)
-        state["total"] += len(piece)
+        total += len(piece)
 
     def visit(value: Any, depth: int = 0) -> None:
         if depth > 20:
@@ -183,7 +185,7 @@ def _argument_text(
         add(repr(value))
 
     visit(args)
-    return "\n".join(pieces), state["exceeded"]
+    return "\n".join(pieces), exceeded
 
 
 def extract_read_paths(args: Any) -> tuple[str, ...]:
@@ -291,7 +293,8 @@ class PolicyConfig:
     @classmethod
     def from_value(cls, mode: Any) -> PolicyConfig:
         clean = str(mode or "balanced").lower().strip()
-        return cls(mode=clean if clean in {"balanced", "strict", "audit"} else "balanced")
+        resolved = cast("Mode", clean if clean in {"balanced", "strict", "audit"} else "balanced")
+        return cls(mode=resolved)
 
     @classmethod
     def from_settings(cls, settings: dict[str, Any] | None) -> PolicyConfig:

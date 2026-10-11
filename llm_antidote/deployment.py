@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from .fleet_crypto import (
     SIGNATURE_SCHEMA,
@@ -27,7 +27,7 @@ from .fleet_crypto import (
 )
 from .fleet_policy import POLICY_SCHEMA, policy_digest, validate_policy
 from .model_lock import load_lock, verify_lock
-from .policy import PolicyConfig
+from .policy import Mode, PolicyConfig
 
 ENFORCED_VALUES = {"enforced", "enforce", "required", "true", "yes", "on"}
 
@@ -178,7 +178,7 @@ def load_runtime_settings(
         lock_digest = sha256_file(settings["admission_model_lock_path"])
 
     enforced_policy = PolicyConfig(
-        mode=mode,
+        mode=cast(Mode, mode),
         safe_read_roots=local.safe_read_roots,
         sensitive_roots=local.sensitive_roots,
         allow_outbound_tools=local.allow_outbound_tools,

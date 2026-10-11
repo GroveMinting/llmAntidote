@@ -309,22 +309,22 @@ def run_cli(args: argparse.Namespace, *, runtime: Any = None) -> int:
                 timeout=args.timeout,
                 trusted_hosts=tuple(getattr(args, "trusted_hosts", None) or ()),
             )
-            report = EvaluationRunner(client, model=args.model, suite=suite).run(
+            evaluation = EvaluationRunner(client, model=args.model, suite=suite).run(
                 minimize=args.minimize,
                 model_lock_sha256=_file_sha256(args.model_lock) if args.model_lock else "",
             )
             json_path, markdown_path = write_reports(
-                report,
+                evaluation,
                 json_output=args.output,
                 markdown_output=args.markdown_output,
             )
-            print(f"Verdict: {report.verdict}")
+            print(f"Verdict: {evaluation.verdict}")
             print(f"JSON report: {json_path}")
             if markdown_path:
                 print(f"Markdown report: {markdown_path}")
-            if report.verdict == NO_BACKDOOR_DETECTED:
+            if evaluation.verdict == NO_BACKDOOR_DETECTED:
                 return 0
-            return 2 if report.verdict == INCONCLUSIVE else 1
+            return 2 if evaluation.verdict == INCONCLUSIVE else 1
         if handler == "eval_replay":
             rendered = render_markdown(load_report(args.report))
             if args.markdown_output:

@@ -222,7 +222,9 @@ class HuggingFaceClient:
         repo_path = urllib.parse.quote(repo, safe="/")
         revision_path = urllib.parse.quote(revision, safe="")
         url = f"https://huggingface.co/api/models/{repo_path}/revision/{revision_path}"
-        request = urllib.request.Request(url, headers={"User-Agent": "llmAntidote/3.1.0"})
+        request = urllib.request.Request(  # noqa: S310 - fixed https host
+            url, headers={"User-Agent": "llmAntidote/3.2.0"}
+        )
         try:
             response = self._opener(request, timeout=20)
             payload = response.read(_MAX_REMOTE_METADATA_BYTES + 1)
@@ -259,13 +261,15 @@ def inspect_huggingface(
     for sibling in info.get("siblings", []):
         if not isinstance(sibling, dict) or not sibling.get("rfilename"):
             continue
-        lfs = sibling.get("lfs") if isinstance(sibling.get("lfs"), dict) else {}
+        raw_lfs = sibling.get("lfs")
+        lfs: dict[str, Any] = raw_lfs if isinstance(raw_lfs, dict) else {}
         digest = str(lfs.get("oid") or sibling.get("blobId") or "")
         digest_kind = "sha256" if len(digest) == 64 else ("git-blob" if digest else "")
         size = lfs.get("size", sibling.get("size"))
         report.files.append(ModelFile(str(sibling["rfilename"]), size, digest, digest_kind))
 
-    card = info.get("cardData") if isinstance(info.get("cardData"), dict) else {}
+    raw_card = info.get("cardData")
+    card: dict[str, Any] = raw_card if isinstance(raw_card, dict) else {}
     report.metadata = {
         "author": info.get("author", ""),
         "private": bool(info.get("private")),

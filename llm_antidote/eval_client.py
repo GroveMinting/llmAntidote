@@ -48,7 +48,15 @@ class Completion:
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+    def redirect_request(
+        self,
+        req: Any,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
         del req, fp, code, msg, headers, newurl
         return None
 
@@ -156,7 +164,7 @@ class OpenAICompatClient:
             raise EvaluationClientError("Evaluation request could not be serialized") from exc
         if len(body) > MAX_REQUEST_BYTES:
             raise EvaluationClientError("Evaluation request exceeded the size limit")
-        headers = {"Content-Type": "application/json", "User-Agent": "llmAntidote/3.1.0"}
+        headers = {"Content-Type": "application/json", "User-Agent": "llmAntidote/3.2.0"}
         if self.api_key_env:
             value = os.environ.get(self.api_key_env)
             if not value:
@@ -164,7 +172,7 @@ class OpenAICompatClient:
                     f"Required API key environment variable is not set: {self.api_key_env}"
                 )
             headers["Authorization"] = f"Bearer {value}"
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # noqa: S310 - scheme is restricted above
             self.request_url, data=body, headers=headers, method="POST"
         )
         try:

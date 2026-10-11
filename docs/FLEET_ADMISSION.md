@@ -135,9 +135,23 @@ hermes antidote fleet ledger list --database antidote-fleet.db --decision DENY
 ```
 
 The ledger verifies signatures and canonical receipt IDs before ingestion. The
-first receipt signer becomes the ledger's pinned trust root; later signers are
-rejected. Duplicate receipts are idempotent. Stored data is selected receipt
-metadata only, never raw receipts or underlying evidence.
+first receipt signer seeds the ledger's signer allowlist; later signers must be
+explicitly allowed. Duplicate receipts are idempotent. Stored data is selected
+receipt metadata only, never raw receipts or underlying evidence.
+
+Signer trust is rotatable and revocable:
+
+```bash
+hermes antidote fleet ledger trust --database antidote-fleet.db
+hermes antidote fleet ledger allow-signer --database antidote-fleet.db --key-id NEW_KEY_ID
+hermes antidote fleet ledger revoke-signer --database antidote-fleet.db --key-id OLD_KEY_ID
+hermes antidote fleet ledger rotate-signer \
+  --database antidote-fleet.db --new-key-id NEW_KEY_ID --old-key-id OLD_KEY_ID
+```
+
+A receipt whose signer is revoked is rejected with a `revoked` error; a signer not
+in the allowlist is rejected with a `trust root` error. A legacy single-signer pin
+is migrated to the allowlist automatically on open.
 
 ## CI/CD
 
@@ -191,11 +205,15 @@ The OpenAI-compatible `/v1` model name is not proof of loaded weights. Enforced
 mode verifies the deployed files against the admitted lockfile and records the
 model name Hermes is configured to serve. If `pre_api_request` observes a
 different model than `admission_model_name`, tool calls are blocked until the
-route matches again. Rechecking occurs on every API request, so a model reload
-or endpoint swap is caught without a restart. Establishing that a served route
-corresponds to the admitted lockfile requires a controlled serving/deployment
-process; llmAntidote verifies the binding you configure, not the serving stack
-itself.
+route matches again. Before any request has been observed, and when an endpoint
+omits the model, the route is treated as unadmitted (fail closed) unless
+`admission_require_route_observation` is set to `"false"`. The status output
+distinguishes `admission.model_route_unobserved` from
+`admission.model_route_mismatch`. Rechecking occurs on every API request, so a
+model reload or endpoint swap is caught without a restart. Establishing that a
+served route corresponds to the admitted lockfile requires a controlled
+serving/deployment process; llmAntidote verifies the binding you configure, not
+the serving stack itself.
 
 ### Startup Health Probe
 
@@ -213,10 +231,10 @@ script, and refuse to start Hermes when it fails.
 
 ## Current Limitations
 
-- No key revocation list or transparency log.
+- No distributable revocation list or transparency log; the ledger's signer
+  allowlist and revocation set are local to the database.
 - No hardware-key, PKCS#11, KMS, or Sigstore backend.
 - No remote policy fetch or automatic policy rollout.
-- One pinned receipt signer per ledger; rotation requires an operator migration.
 - No multi-user authorization layer around the SQLite ledger.
 - Receipt signing uses an unencrypted PEM key supplied explicitly by the operator.
 - Process restart reloads in-memory taint and pending state; enforced admission

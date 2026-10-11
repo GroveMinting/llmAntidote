@@ -351,7 +351,7 @@ def create_attestation(
         },
         "predicate": {
             "type": "https://github.com/GroveMinting/llmAntidote/attestation/v1",
-            "generator": "llmAntidote/3.1.0",
+            "generator": "llmAntidote/3.2.0",
             "evidence": evidence,
         },
     }

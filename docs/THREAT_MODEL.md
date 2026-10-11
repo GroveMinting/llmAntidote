@@ -26,7 +26,12 @@
 - Preserve enough metadata to explain policy decisions without retaining secrets.
 - Detect changes relative to an operator-created model lockfile.
 - Refuse to start an enforced deployment without a verified signed policy and model binding.
-- Block tool calls when the served model route stops matching the admitted model.
+- Block tool calls when the served model route stops matching the admitted model,
+  including before any route has been observed.
+- Refuse arguments that exceed the policy scan limit rather than approving them.
+- Scope taint to the capabilities that could carry a secret.
+- Correlate pending sensitive access by tool-call id so concurrent calls release
+  independently.
 - Exercise candidate triggers without executing model-requested side effects.
 - Refuse promotion when signed evidence does not satisfy signed fleet policy.
 
@@ -43,19 +48,24 @@
 - Replacing containers, microVMs, file permissions, or network policy.
 - Proving that a recovered behavioral trigger was intentionally trained.
 - Protecting an authority private key after host compromise.
-- Revocation distribution, hardware-backed key custody, or transparency logs.
+- Hardware-backed key custody. Distributable revocation lists or transparency
+  logs are also out of scope; the ledger carries a local signer allowlist and
+  revocation set, and distributing or enforcing it fleet-wide is an operator
+  process today.
 
 ## Residual Risk
 
 An attacker can use novel interpreters, renamed binaries, indirect scripts,
-allowed services, or covert channels that do not match static rules. The
-capability classifier is a name-based heuristic: an unknown plugin tool is
-treated as potentially outbound and routed to approval, which can be noisy but
-fails closed. If Hermes authorizes an outbound call before the sensitive-read
-pre-hook in the same batch, per-call state cannot cover the batch; outbound
-message tools still require approval, and in a batch the model cannot include a
-secret the read has not yet returned. Run untrusted agents without production
-secrets and enforce egress outside Hermes.
+token assembly (`"cu"+"rl"`), allowed services, or covert channels that do not
+match static rules. The capability classifier is a name-based heuristic: an
+unknown plugin tool is treated as potentially outbound and routed to approval,
+which can be noisy but fails closed. The bridge `tool_call` is treated as an
+intentionally-unknown egress/exec tool rather than inspecting its deferred
+target. If Hermes authorizes an outbound call before the sensitive-read pre-hook
+in the same batch, per-call state cannot cover the batch; outbound message tools
+still require approval, and in a batch the model cannot include a secret the read
+has not yet returned. Run untrusted agents without production secrets and enforce
+egress outside Hermes.
 
 The behavioral evaluator necessarily sends test prompts to the configured model
 endpoint. It refuses credentials in endpoint URLs, permits plain HTTP only on

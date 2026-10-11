@@ -86,6 +86,26 @@ def test_pending_reservation_is_idempotent_per_call_id():
     assert not store.has_pending("session-a")
 
 
+def test_pending_call_id_is_scoped_per_session():
+    store = SessionRiskStore()
+    store.reserve_pending(("session-a",), call_id="call-1")
+    store.reserve_pending(("session-b",), call_id="call-1")
+    assert store.has_pending("session-a")
+    assert store.has_pending("session-b")
+    store.release_pending(("session-a",), call_id="call-1")
+    assert not store.has_pending("session-a")
+    assert store.has_pending("session-b")
+    store.release_pending(("session-b",), call_id="call-1")
+    assert not store.has_pending("session-b")
+
+
+def test_pending_call_id_release_cannot_cross_sessions():
+    store = SessionRiskStore()
+    store.reserve_pending(("session-a",), call_id="call-1")
+    store.release_pending(("session-b",), call_id="call-1")
+    assert store.has_pending("session-a")
+
+
 
 def test_session_taint_is_isolated_and_clearable():
     store = SessionRiskStore()

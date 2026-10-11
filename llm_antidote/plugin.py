@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 from .audit import MetadataAudit
@@ -97,10 +98,19 @@ class AntidoteRuntime:
     audit: MetadataAudit
     routes: RuntimeRoutes
     binding: RuntimePolicyBinding
+    anonymous_key: str = field(default_factory=lambda: f"anonymous-{uuid.uuid4().hex}")
 
     def session_keys(self, session_id: str = "", task_id: str = "") -> tuple[str, ...]:
-        keys = tuple(dict.fromkeys(value for value in (session_id, task_id) if value))
-        return keys or ("unknown",)
+        """Correlate by session id, falling back to task id, else a per-instance key.
+
+        Deliberately never merges session and task ids: a shared/global task id must
+        not join unrelated sessions, and sessions without ids must not collapse into
+        one shared bucket.
+        """
+        for value in (session_id, task_id):
+            if value:
+                return (str(value),)
+        return (self.anonymous_key,)
 
     def route_admission(self) -> tuple[bool, str]:
         """Whether tool calls may proceed given the enforced model binding.
@@ -133,9 +143,9 @@ class AntidoteRuntime:
         args: Any,
         session_id: str = "",
         task_id: str = "",
+        tool_call_id: str = "",
     ) -> PolicyDecision:
         keys = self.session_keys(session_id, task_id)
-        self.risks.link(keys)
         admitted, reason = self.route_admission()
         if not admitted:
             if reason == "admission.model_route_unobserved":
@@ -182,7 +192,7 @@ class AntidoteRuntime:
             and decision.action != "block"
             and _reserves_access(decision)
         ):
-            self.risks.reserve_pending(keys)
+            self.risks.reserve_pending(keys, tool_call_id)
         return decision
 
     def post_tool(
@@ -195,13 +205,14 @@ class AntidoteRuntime:
         error_type: Any = None,
         session_id: str = "",
         task_id: str = "",
+        tool_call_id: str = "",
     ) -> None:
         keys = self.session_keys(session_id, task_id)
         if not _tool_succeeded(status, error_type, result):
-            self.risks.release_pending(keys)
+            self.risks.release_pending(keys, tool_call_id)
             return
         decision = self.engine.assess(tool_name, args, session_tainted=False)
-        self.risks.release_pending(keys)
+        self.risks.release_pending(keys, tool_call_id)
         if decision.sensitive:
             self.risks.mark_many(keys, decision.sensitive)
 
@@ -288,6 +299,8 @@ def register(ctx: Any) -> None:
         args: Any = None,
         session_id: str = "",
         task_id: str = "",
+        tool_call_id: str = "",
+        turn_id: str = "",
         **_: Any,
     ) -> dict[str, str] | None:
         decision = runtime.decide(
@@ -295,6 +308,7 @@ def register(ctx: Any) -> None:
             args=args,
             session_id=session_id,
             task_id=task_id,
+            tool_call_id=tool_call_id or turn_id,
         )
         if decision.action == "block":
             return {"action": "block", "message": decision.message}
@@ -315,6 +329,8 @@ def register(ctx: Any) -> None:
         error_type: Any = None,
         session_id: str = "",
         task_id: str = "",
+        tool_call_id: str = "",
+        turn_id: str = "",
         **_: Any,
     ) -> None:
         runtime.post_tool(
@@ -325,6 +341,7 @@ def register(ctx: Any) -> None:
             error_type=error_type,
             session_id=session_id,
             task_id=task_id,
+            tool_call_id=tool_call_id or turn_id,
         )
 
     def pre_api_request(

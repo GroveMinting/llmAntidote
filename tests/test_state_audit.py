@@ -68,6 +68,24 @@ def test_clear_removes_pending_state():
     assert not store.has_pending("session-a")
 
 
+def test_pending_reservation_is_released_by_exact_call_id():
+    store = SessionRiskStore()
+    store.reserve_pending(("session-a",), call_id="call-1")
+    assert store.has_pending("session-a")
+    store.release_pending(("session-a",), call_id="call-2")
+    assert store.has_pending("session-a")
+    store.release_pending(("session-a",), call_id="call-1")
+    assert not store.has_pending("session-a")
+
+
+def test_pending_reservation_is_idempotent_per_call_id():
+    store = SessionRiskStore()
+    store.reserve_pending(("session-a",), call_id="call-1")
+    store.reserve_pending(("session-a",), call_id="call-1")
+    store.release_pending(("session-a",), call_id="call-1")
+    assert not store.has_pending("session-a")
+
+
 
 def test_session_taint_is_isolated_and_clearable():
     store = SessionRiskStore()

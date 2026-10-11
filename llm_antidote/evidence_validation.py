@@ -107,6 +107,12 @@ def _finite_number(value: Any) -> bool:
     )
 
 
+def _require_finite_number(value: Any, name: str) -> float:
+    if not _finite_number(value):
+        raise ValueError(f"Evaluation report {name} is not a finite number")
+    return float(value)
+
+
 def validate_model_lock_document(value: dict[str, Any]) -> dict[str, Any]:
     if value.get("schema") != LOCK_SCHEMA or value.get("algorithm") != "sha256":
         raise ValueError("Model lock schema or algorithm is invalid")
@@ -190,15 +196,15 @@ def validate_evaluation_report(value: dict[str, Any]) -> dict[str, Any]:
     criteria = coverage.get("criteria")
     if not isinstance(criteria, dict):
         raise ValueError("Evaluation report coverage criteria are missing")
-    activation = criteria.get("activation_threshold")
-    control_max = criteria.get("control_max_rate")
-    max_error = criteria.get("max_error_rate")
+    activation = _require_finite_number(
+        criteria.get("activation_threshold"), "activation threshold"
+    )
+    control_max = _require_finite_number(criteria.get("control_max_rate"), "control max rate")
+    max_error = _require_finite_number(criteria.get("max_error_rate"), "max error rate")
     min_carriers = criteria.get("min_carriers")
-    if not all(_finite_number(item) for item in (activation, control_max, max_error)):
-        raise ValueError("Evaluation report criteria contain non-finite values")
-    if not 0 <= float(activation) <= 1 or not 0 <= float(control_max) <= 1:
+    if not 0 <= activation <= 1 or not 0 <= control_max <= 1:
         raise ValueError("Evaluation report activation criteria are invalid")
-    if not 0 <= float(max_error) <= 0.95:
+    if not 0 <= max_error <= 0.95:
         raise ValueError("Evaluation report max error rate is invalid")
     if not isinstance(min_carriers, int) or isinstance(min_carriers, bool) or min_carriers < 1:
         raise ValueError("Evaluation report minimum carriers is invalid")
@@ -212,10 +218,10 @@ def validate_evaluation_report(value: dict[str, Any]) -> dict[str, Any]:
     controls = [_validate_trial(item) for item in controls_raw]
     control_map: dict[tuple[str, int], dict[str, Any]] = {}
     for trial in controls:
-        key = (trial["carrier_id"], trial["repeat"])
-        if key in control_map or trial["candidate_present"]:
+        control_key = (trial["carrier_id"], trial["repeat"])
+        if control_key in control_map or trial["candidate_present"]:
             raise ValueError("Evaluation control trials are duplicated or mislabeled")
-        control_map[key] = trial
+        control_map[control_key] = trial
     carrier_ids = {key[0] for key in control_map}
     repeat_ids = {key[1] for key in control_map}
     if repeat_ids != set(range(len(repeat_ids))) or len(control_map) != len(carrier_ids) * len(
@@ -285,11 +291,11 @@ def validate_evaluation_report(value: dict[str, Any]) -> dict[str, Any]:
                 float(candidate[key]), expected_value, abs_tol=1e-12
             ):
                 raise ValueError(f"Evaluation candidate {key} does not match trials")
-        inconclusive = not paired or error_rate > float(max_error)
+        inconclusive = not paired or error_rate > max_error
         recovered = (
             not inconclusive
-            and activation_rate >= float(activation)
-            and control_rate <= float(control_max)
+            and activation_rate >= activation
+            and control_rate <= control_max
             and len(carrier_hits) >= min_carriers
         )
         if candidate.get("inconclusive") is not inconclusive:
@@ -328,7 +334,7 @@ def validate_evaluation_report(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(resource_limit, bool):
         raise ValueError("Evaluation resource-limit status is invalid")
     global_inconclusive = (
-        not completed or error_rate > float(max_error) or resource_limit or candidate_inconclusive
+        not completed or error_rate > max_error or resource_limit or candidate_inconclusive
     )
     recovered_any = False
     for candidate, provisional in provisional_recovery:

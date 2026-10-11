@@ -31,6 +31,7 @@ an action, but Hermes and the host decide whether it runs.
 
 ## Safeguards
 
+**Runtime policy**
 - Blocks commands that combine sensitive reads with network transmission.
 - Blocks recognizable download-and-execute and reverse-shell patterns.
 - Classifies tools by capability, not only argument text; send/upload connectors
@@ -38,17 +39,24 @@ an action, but Hermes and the host decide whether it runs.
 - Requires approval for reads outside operator-configured safe roots, including
   unlisted secret filenames such as `token.json`.
 - Routes ambiguous sensitive access through Hermes' human approval flow.
-- Tracks approved sensitive reads as session-scoped taint metadata.
-- Reserves pending sensitive access so outbound calls cannot run before a read resolves.
-- Blocks outbound-capable calls from tainted or pending sessions.
+- Tracks approved sensitive reads as session-scoped taint metadata, scoped by
+  capability, and reserves pending sensitive access so outbound calls cannot run
+  before a read resolves (correlated by tool-call id).
 - Records rule IDs, fixed tool families, and decisions without raw tool names,
   arguments, results, or secrets.
+
+**Provenance**
 - Inspects local and Hugging Face model provenance without loading model weights.
 - Creates immutable model lockfiles and verifies local files against SHA-256 hashes.
+
+**Evaluation**
 - Runs paired trigger-candidate evaluations with synthetic tools and coverage-scoped verdicts.
+
+**Fleet admission**
 - Enforces signed fleet policy over attestations, model locks, and evaluation evidence.
 - Enforces signed runtime admission and blocks tool calls on model-route mismatch.
-- Produces signed PASS/DENY receipts and metadata-only fleet status reporting.
+- Produces signed PASS/DENY receipts with a rotatable/revocable signer trust root
+  and metadata-only fleet status reporting.
 
 ## Requirements
 
@@ -223,15 +231,22 @@ plugins:
       settings:
         mode: balanced
         taint_ttl_minutes: 60
+        pending_ttl_minutes: 5
+        taint_scope: egress_persist_shell
+        max_scan_bytes: 1048576
         audit_capacity: 200
         safe_read_roots: /home/agent/workspace
         sensitive_roots: /home/agent/.config
 ```
 
 Reads inside `safe_read_roots` are ordinary unless the name matches a known
-secret pattern; reads outside every safe root require approval. See
+secret pattern; reads outside every safe root require approval. `taint_scope`
+chooses which capabilities a completed sensitive read blocks
+(`egress`, `egress_persist_shell` (default), or `all`); `max_scan_bytes` is the
+argument scan limit, above which a call is refused. See
 [`docs/POLICY.md`](docs/POLICY.md) for capability classification, outbound
-allow-listing, and the pending-sensitive-access state machine.
+allow-listing, content-vs-intent handling, and the pending-sensitive-access state
+machine.
 
 ## Enforced Fleet Runtime
 
@@ -239,8 +254,10 @@ Admission is not only a CI gate. Set `admission_enforcement: enforced` with a
 signed policy and a verified model binding and the plugin will refuse to
 register unless both verify. The signed policy's runtime mode and taint TTL
 become authoritative, and tool calls are blocked if the served model route stops
-matching the admitted model. Use `llm-antidote fleet runtime-verify --settings
-SETTINGS.json` as an external supervisor/startup probe. See
+matching the admitted model. In enforced mode an unobserved or empty model route
+also fails closed unless `admission_require_route_observation: "false"` is set.
+Use `llm-antidote fleet runtime-verify --settings SETTINGS.json` as an external
+supervisor/startup probe. See
 [`docs/FLEET_ADMISSION.md`](docs/FLEET_ADMISSION.md).
 
 ## Decision Flow
@@ -314,22 +331,32 @@ v3 adds a local control-plane contract for model promotion. Signed policies
 declare acceptable evaluation verdicts, suite identities, coverage, error rate,
 evidence age, and model-lock binding. Admission produces a signed receipt whose
 exit status is suitable for CI/CD gates. A metadata-only SQLite ledger accepts
-only signed receipts and reports PASS/DENY counts without ingesting prompts,
-tool arguments, credentials, or model output.
+only signed receipts, supports signer allowlisting/revocation/rotation, and
+reports PASS/DENY counts without ingesting prompts, tool arguments, credentials,
+or model output.
 
 ## Development
 
 ```bash
 python -m pip install -e .
 python -m pip install -r requirements-dev.txt
-pytest
+pytest --cov=llm_antidote --cov-fail-under=80
 ruff check .
+mypy
 ```
 
 Development tooling lives in `requirements-dev.txt`, not a `[project.optional-dependencies]`
 extra: Hermes resolves directory plugins with `--all-extras`, so a `dev` extra
 would be installed into the host environment and can conflict with Hermes' own
 pinned tooling.
+
+With a Hermes checkout on `PYTHONPATH`, the end-to-end hook harness drives the
+plugin through Hermes' real plugin manager:
+
+```bash
+PYTHONPATH=/path/to/hermes-agent python tests/integration/hermes_e2e.py --mode standalone
+PYTHONPATH=/path/to/hermes-agent python tests/integration/hermes_e2e.py --mode enforced
+```
 
 When Hermes is installed locally, also run:
 
@@ -344,10 +371,13 @@ hermes plugins validate .
 plugin.yaml                 Hermes plugin manifest
 __init__.py                 Hermes registration entry point
 llm_antidote/               capability policy, runtime, evaluation, admission, deployment, ledger
-tests/                      policy and provenance tests
-docs/                       threat model, policy, evaluation, fleet admission, project plan
+tests/                      policy, provenance, and property tests
+tests/integration/          real-Hermes end-to-end hook harness
+tests/data/                 maintained Hermes tool inventory
+scripts/                    maintenance helpers (tool-inventory recorder)
+docs/                       threat model, policy, evaluation, fleet admission, roadmap
 examples/                   bounded evaluation suite examples
-.github/workflows/ci.yml    static checks and unit tests
+.github/workflows/ci.yml    static checks, unit tests, and Hermes end-to-end
 ```
 
 ## Sources and Limitations

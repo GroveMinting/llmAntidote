@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -97,9 +98,44 @@ def _connect(path: str | Path) -> sqlite3.Connection:
         "INSERT OR IGNORE INTO metadata(key, value) VALUES('schema_version', ?)",
         (str(SCHEMA_VERSION),),
     )
+    _migrate_trust_root(connection)
     connection.commit()
     _harden_database_files(destination)
     return connection
+
+
+def _key_ids(connection: sqlite3.Connection, key: str) -> list[str]:
+    row = connection.execute("SELECT value FROM metadata WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return []
+    try:
+        value = json.loads(row[0])
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
+
+
+def _store_key_ids(connection: sqlite3.Connection, key: str, values: list[str]) -> None:
+    connection.execute(
+        "INSERT OR REPLACE INTO metadata(key, value) VALUES(?, ?)",
+        (key, json.dumps(sorted(set(values)))),
+    )
+
+
+def _migrate_trust_root(connection: sqlite3.Connection) -> None:
+    """Migrate the legacy single-signer pin to the allowlist metadata."""
+    legacy = connection.execute(
+        "SELECT value FROM metadata WHERE key = 'receipt_signer_key_id'"
+    ).fetchone()
+    if legacy is None:
+        return
+    allowed = _key_ids(connection, "receipt_signer_key_ids")
+    if legacy[0] and legacy[0] not in allowed:
+        allowed.append(legacy[0])
+        _store_key_ids(connection, "receipt_signer_key_ids", allowed)
+    connection.execute("DELETE FROM metadata WHERE key = 'receipt_signer_key_id'")
 
 
 def validate_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
@@ -217,17 +253,17 @@ def ingest_receipt(
     with closing(_connect(database)) as connection:
         connection.execute("BEGIN IMMEDIATE")
         signer_key_id = str(signature.get("key_id") or "")
-        trusted = connection.execute(
-            "SELECT value FROM metadata WHERE key = 'receipt_signer_key_id'"
-        ).fetchone()
-        if trusted is None:
-            connection.execute(
-                "INSERT INTO metadata(key, value) VALUES('receipt_signer_key_id', ?)",
-                (signer_key_id,),
-            )
-        elif trusted[0] != signer_key_id:
+        allowed = _key_ids(connection, "receipt_signer_key_ids")
+        revoked = _key_ids(connection, "receipt_revoked_key_ids")
+        if signer_key_id in revoked:
             connection.rollback()
-            raise ValueError("Receipt signer does not match the ledger trust root")
+            raise ValueError("Receipt signer key id is revoked")
+        if not allowed:
+            allowed = [signer_key_id]
+            _store_key_ids(connection, "receipt_signer_key_ids", allowed)
+        elif signer_key_id not in allowed:
+            connection.rollback()
+            raise ValueError("Receipt signer is not in the ledger trust root")
         cursor = connection.execute(
             """
             INSERT OR IGNORE INTO receipts(
@@ -240,6 +276,54 @@ def ingest_receipt(
         )
         connection.commit()
         return cursor.rowcount == 1
+
+
+def ledger_trust_state(database: str | Path) -> dict[str, Any]:
+    with closing(_connect(database)) as connection:
+        return {
+            "schema": "llm-antidote.fleet-trust.v1",
+            "allowed": _key_ids(connection, "receipt_signer_key_ids"),
+            "revoked": _key_ids(connection, "receipt_revoked_key_ids"),
+        }
+
+
+def ledger_allow_signer(database: str | Path, key_id: str) -> dict[str, Any]:
+    clean = _safe_text(key_id, name="key id", maximum=128)
+    with closing(_connect(database)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        allowed = _key_ids(connection, "receipt_signer_key_ids")
+        revoked = _key_ids(connection, "receipt_revoked_key_ids")
+        if clean in revoked:
+            connection.rollback()
+            raise ValueError("Signer key id is revoked; clear the revocation first")
+        if clean not in allowed:
+            allowed.append(clean)
+            _store_key_ids(connection, "receipt_signer_key_ids", allowed)
+        connection.commit()
+    return {"allowed": allowed, "revoked": revoked}
+
+
+def ledger_revoke_signer(database: str | Path, key_id: str) -> dict[str, Any]:
+    clean = _safe_text(key_id, name="key id", maximum=128)
+    with closing(_connect(database)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        allowed = [item for item in _key_ids(connection, "receipt_signer_key_ids") if item != clean]
+        revoked = _key_ids(connection, "receipt_revoked_key_ids")
+        if clean not in revoked:
+            revoked.append(clean)
+        _store_key_ids(connection, "receipt_signer_key_ids", allowed)
+        _store_key_ids(connection, "receipt_revoked_key_ids", revoked)
+        connection.commit()
+    return {"allowed": allowed, "revoked": revoked}
+
+
+def ledger_rotate_signer(
+    database: str | Path, *, new_key_id: str, old_key_id: str = ""
+) -> dict[str, Any]:
+    ledger_allow_signer(database, new_key_id)
+    if old_key_id:
+        ledger_revoke_signer(database, old_key_id)
+    return ledger_trust_state(database)
 
 
 def list_receipts(
@@ -280,15 +364,16 @@ def fleet_summary(database: str | Path) -> dict[str, Any]:
         latest = connection.execute(
             "SELECT issued_at, decision, receipt_id FROM receipts ORDER BY ingested_at DESC LIMIT 1"
         ).fetchone()
-        signer = connection.execute(
-            "SELECT value FROM metadata WHERE key = 'receipt_signer_key_id'"
-        ).fetchone()
+        allowed = _key_ids(connection, "receipt_signer_key_ids")
+        revoked = _key_ids(connection, "receipt_revoked_key_ids")
     return {
         "schema": "llm-antidote.fleet-summary.v1",
         "receipts": total,
         "pass": pass_count,
         "deny": deny_count,
         "subjects": subjects,
-        "receipt_signer_key_id": signer[0] if signer is not None else None,
+        "receipt_signer_key_id": allowed[0] if allowed else None,
+        "receipt_signer_key_ids": allowed,
+        "receipt_revoked_key_ids": revoked,
         "latest": dict(latest) if latest is not None else None,
     }

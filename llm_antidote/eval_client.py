@@ -48,7 +48,15 @@ class Completion:
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+    def redirect_request(
+        self,
+        req: Any,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
         del req, fp, code, msg, headers, newurl
         return None
 
@@ -62,9 +70,14 @@ def _is_loopback(hostname: str) -> bool:
         return False
 
 
-def _is_trusted(hostname: str, trusted_hosts: tuple[str, ...]) -> bool:
-    clean = hostname.lower().strip()
-    return any(clean == host.lower().strip() for host in trusted_hosts if host)
+def _is_trusted(hostname: str, host_port: str, trusted_hosts: tuple[str, ...]) -> bool:
+    clean_host = hostname.lower().strip()
+    clean_host_port = host_port.lower().strip()
+    for host in trusted_hosts:
+        candidate = host.lower().strip()
+        if candidate and candidate in (clean_host, clean_host_port):
+            return True
+    return False
 
 
 def normalize_endpoint(
@@ -76,10 +89,13 @@ def normalize_endpoint(
         raise ValueError("Evaluation endpoint must be an absolute HTTP(S) URL")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("Evaluation endpoint must not contain credentials, query, or fragment")
+    display_host = parsed.hostname
+    if parsed.port:
+        display_host = f"{display_host}:{parsed.port}"
     if (
         parsed.scheme == "http"
         and not _is_loopback(parsed.hostname)
-        and not _is_trusted(parsed.hostname, trusted_hosts)
+        and not _is_trusted(parsed.hostname, display_host, trusted_hosts)
     ):
         raise ValueError(
             "Plain HTTP evaluation endpoints are restricted to loopback hosts. "
@@ -93,9 +109,6 @@ def normalize_endpoint(
     else:
         request_path = f"{path}/chat/completions" if path else "/v1/chat/completions"
     request_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, request_path, "", ""))
-    display_host = parsed.hostname
-    if parsed.port:
-        display_host = f"{display_host}:{parsed.port}"
     return request_url, display_host
 
 
@@ -151,7 +164,7 @@ class OpenAICompatClient:
             raise EvaluationClientError("Evaluation request could not be serialized") from exc
         if len(body) > MAX_REQUEST_BYTES:
             raise EvaluationClientError("Evaluation request exceeded the size limit")
-        headers = {"Content-Type": "application/json", "User-Agent": "llmAntidote/3.1.0"}
+        headers = {"Content-Type": "application/json", "User-Agent": "llmAntidote/3.2.0"}
         if self.api_key_env:
             value = os.environ.get(self.api_key_env)
             if not value:
@@ -159,7 +172,7 @@ class OpenAICompatClient:
                     f"Required API key environment variable is not set: {self.api_key_env}"
                 )
             headers["Authorization"] = f"Bearer {value}"
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # noqa: S310 - scheme is restricted above
             self.request_url, data=body, headers=headers, method="POST"
         )
         try:

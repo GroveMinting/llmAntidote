@@ -6,7 +6,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from .capabilities import ToolCapability, classify_tool, is_taint_safe_tool
 
@@ -74,6 +74,12 @@ _REVERSE_SHELL: tuple[re.Pattern[str], ...] = (
 
 _NETWORK_CAPABLE_TOOLS = {"execute_code", "http_request", "terminal"}
 _FILESYSTEM_READ_TOOLS = {"read_file", "list_files", "search_files"}
+_WRITE_PATH_TOOLS = {"write_file", "patch", "apply_patch"}
+_CONTENT_KEYS = frozenset(
+    {"content", "new_str", "old_str", "new_string", "old_string", "text", "patch", "diff"}
+)
+_TAINT_SCOPES = {"egress", "egress_persist_shell", "all"}
+_DEFAULT_MAX_SCAN_BYTES = 1_048_576
 _READ_PATH_KEYS = {
     "path",
     "paths",
@@ -89,7 +95,6 @@ _READ_PATH_KEYS = {
     "dirs",
     "root",
 }
-_MAX_POLICY_CHARS = 262_144
 
 
 def _string_tuple(value: Any) -> tuple[str, ...]:
@@ -108,50 +113,79 @@ def _default_safe_roots() -> tuple[str, ...]:
     return tuple(dict.fromkeys((os.getcwd(), tempfile.gettempdir())))
 
 
-def _argument_text(args: Any) -> tuple[str, bool]:
-    """Produce bounded policy input; this value is never persisted or logged."""
+def _bounded_scan_bytes(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = _DEFAULT_MAX_SCAN_BYTES
+    return max(4096, min(parsed, 16 * 1024 * 1024))
+
+
+def _argument_text(
+    args: Any, limit: int, *, exclude_keys: frozenset[str] = frozenset()
+) -> tuple[str, bool]:
+    """Produce bounded policy input; this value is never persisted or logged.
+
+    Returns the assembled text (at most ``limit`` characters) and whether the
+    argument set exceeded ``limit``. When it exceeds the limit the tool call is
+    refused rather than scanned, so a pattern hidden mid-payload cannot slip past.
+    """
     pieces: list[str] = []
     seen: set[int] = set()
+    total = 0
+    exceeded = False
+
+    def add(piece: str) -> None:
+        nonlocal total, exceeded
+        if exceeded:
+            return
+        remaining = limit - total
+        if len(piece) > remaining:
+            if remaining > 0:
+                pieces.append(piece[:remaining])
+            total = limit
+            exceeded = True
+            return
+        pieces.append(piece)
+        total += len(piece)
 
     def visit(value: Any, depth: int = 0) -> None:
         if depth > 20:
-            pieces.append("<max-depth>")
+            add("<max-depth>")
             return
         if isinstance(value, str):
-            pieces.append(value)
+            add(value)
             return
         if isinstance(value, bytes):
-            pieces.append(value.decode("utf-8", errors="replace"))
+            add(value.decode("utf-8", errors="replace"))
             return
         if isinstance(value, dict):
             identity = id(value)
             if identity in seen:
-                pieces.append("<cycle>")
+                add("<cycle>")
                 return
             seen.add(identity)
             for key in sorted(value, key=lambda item: str(item)):
-                pieces.append(str(key))
+                if str(key).lower() in exclude_keys:
+                    continue
+                add(str(key))
                 visit(value[key], depth + 1)
             seen.remove(identity)
             return
         if isinstance(value, (list, tuple, set, frozenset)):
             identity = id(value)
             if identity in seen:
-                pieces.append("<cycle>")
+                add("<cycle>")
                 return
             seen.add(identity)
             for item in value:
                 visit(item, depth + 1)
             seen.remove(identity)
             return
-        pieces.append(repr(value))
+        add(repr(value))
 
     visit(args)
-    value = "\n".join(pieces)
-    if len(value) <= _MAX_POLICY_CHARS:
-        return value, False
-    half = _MAX_POLICY_CHARS // 2
-    return value[:half] + value[-half:], True
+    return "\n".join(pieces), exceeded
 
 
 def extract_read_paths(args: Any) -> tuple[str, ...]:
@@ -232,30 +266,59 @@ def sensitive_categories(text: str) -> tuple[str, ...]:
     return tuple(name for name, pattern in _SENSITIVE_PATTERNS if pattern.search(text))
 
 
+def classify_write_paths(
+    paths: tuple[str, ...],
+    *,
+    sensitive_roots: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return write-specific categories for local-write tool targets."""
+    categories: set[str] = set()
+    for raw in paths:
+        resolved = _normalize_path(raw)
+        if any(_within(resolved, root) for root in sensitive_roots):
+            categories.add("sensitive_root_write")
+    return tuple(sorted(categories))
+
+
 @dataclass(frozen=True)
 class PolicyConfig:
     mode: Mode = "balanced"
     safe_read_roots: tuple[str, ...] = ()
     sensitive_roots: tuple[str, ...] = ()
     allow_outbound_tools: tuple[str, ...] = ()
-    classifier_version: int = 1
+    classifier_version: int = 2
+    taint_scope: str = "egress_persist_shell"
+    max_scan_bytes: int = _DEFAULT_MAX_SCAN_BYTES
 
     @classmethod
     def from_value(cls, mode: Any) -> PolicyConfig:
         clean = str(mode or "balanced").lower().strip()
-        return cls(mode=clean if clean in {"balanced", "strict", "audit"} else "balanced")
+        resolved = cast("Mode", clean if clean in {"balanced", "strict", "audit"} else "balanced")
+        return cls(mode=resolved)
 
     @classmethod
     def from_settings(cls, settings: dict[str, Any] | None) -> PolicyConfig:
         settings = settings or {}
         config = cls.from_value(settings.get("mode", "balanced"))
         safe_roots = _string_tuple(settings.get("safe_read_roots")) or _default_safe_roots()
+        scope = str(settings.get("taint_scope", "egress_persist_shell")).lower().strip()
         return cls(
             mode=config.mode,
             safe_read_roots=safe_roots,
             sensitive_roots=_string_tuple(settings.get("sensitive_roots")),
             allow_outbound_tools=_string_tuple(settings.get("allow_outbound_tools")),
+            taint_scope=scope if scope in _TAINT_SCOPES else "egress_persist_shell",
+            max_scan_bytes=_bounded_scan_bytes(settings.get("max_scan_bytes")),
         )
+
+
+def _taint_blocks(profile: Any, scope: str) -> bool:
+    """Whether a tainted session should block a tool of this capability."""
+    if scope == "all":
+        return not profile.read_only
+    if scope == "egress":
+        return profile.outbound
+    return profile.outbound or profile.persists or profile.executes
 
 
 @dataclass(frozen=True)
@@ -291,38 +354,51 @@ class PolicyEngine:
         return tuple(sorted({*known, *path_categories}))
 
     def assess(self, tool_name: str, args: Any, *, session_tainted: bool = False) -> PolicyDecision:
-        text, oversized = _argument_text(args)
-        known = sensitive_categories(text)
-        sensitive = self._read_categories(tool_name, args, known)
         profile = classify_tool(tool_name)
+        limit = self.config.max_scan_bytes
+        full_text, oversized = _argument_text(args, limit)
+        is_write = profile.capability is ToolCapability.LOCAL_WRITE or (
+            tool_name.lower().strip() in _WRITE_PATH_TOOLS
+        )
+        if is_write:
+            scan_text, _ = _argument_text(args, limit, exclude_keys=_CONTENT_KEYS)
+            known = sensitive_categories(scan_text)
+            write_categories = classify_write_paths(
+                extract_read_paths(args), sensitive_roots=self.config.sensitive_roots
+            )
+            sensitive = tuple(sorted({*known, *write_categories}))
+        else:
+            scan_text = full_text
+            known = sensitive_categories(scan_text)
+            sensitive = self._read_categories(tool_name, args, known)
         allow_listed = profile.name in self.config.allow_outbound_tools
         rules: list[str] = []
         desired: Action = "allow"
         message = ""
 
-        if any(pattern.search(text) for pattern in _REVERSE_SHELL):
+        if any(pattern.search(scan_text) for pattern in _REVERSE_SHELL):
             desired = "block"
             rules.append("execution.reverse_shell")
             message = "llmAntidote blocked a recognizable reverse-shell pattern."
-        elif any(pattern.search(text) for pattern in _DOWNLOAD_EXECUTE):
+        elif any(pattern.search(scan_text) for pattern in _DOWNLOAD_EXECUTE):
             desired = "block"
             rules.append("execution.remote_payload")
             message = "llmAntidote blocked a recognizable download-and-execute chain."
-        elif known and _NETWORK_SINK.search(text):
+        elif known and _NETWORK_SINK.search(scan_text):
             desired = "block"
             rules.extend(f"exfil.{category}" for category in known)
             message = "llmAntidote blocked a tool call combining sensitive access with egress."
-        elif session_tainted and not is_taint_safe_tool(tool_name):
+        elif session_tainted and _taint_blocks(profile, self.config.taint_scope):
             desired = "block"
             rules.append("exfil.tainted_session_egress")
             message = (
-                "llmAntidote blocked a non-read-only tool after a sensitive read in this session."
+                "llmAntidote blocked an egress-capable tool after a sensitive read in this session."
             )
         elif oversized:
-            desired = "approve"
-            rules.append("input.oversized_arguments")
+            desired = "block"
+            rules.append("input.arguments_exceed_scan_limit")
             sensitive = tuple(sorted((*sensitive, "oversized_arguments")))
-            message = "llmAntidote requires approval because tool arguments exceed its scan limit."
+            message = "llmAntidote blocked a tool call whose arguments exceed the scan limit."
         elif sensitive:
             desired = "approve"
             rules.extend(f"access.{category}" for category in sensitive)
@@ -340,11 +416,21 @@ class PolicyEngine:
                     "llmAntidote requires approval for an unclassified plugin tool that may "
                     "have outbound capability."
                 )
-        elif _UPLOAD_SINK.search(text):
+        elif profile.requires_persist_approval:
+            desired = "approve"
+            rules.append("persist.durable_write")
+            message = (
+                "llmAntidote requires approval for a tool with durable persistence or "
+                "scheduling capability."
+            )
+        elif _UPLOAD_SINK.search(scan_text):
             desired = "approve"
             rules.append("egress.upload")
             message = "llmAntidote requires approval for an outbound upload-capable operation."
-        elif tool_name.lower().strip() in _NETWORK_CAPABLE_TOOLS and _NETWORK_SINK.search(text):
+        elif (
+            tool_name.lower().strip() in _NETWORK_CAPABLE_TOOLS
+            and _NETWORK_SINK.search(scan_text)
+        ):
             desired = "approve"
             rules.append("egress.network_command")
             message = "llmAntidote requires approval for a network-capable operation."

@@ -546,8 +546,8 @@ class EvaluationRunner:
             or main_resource_limit_hit
             or any(candidate.inconclusive for candidate in candidate_results)
         ):
-            for candidate in candidate_results:
-                candidate.recovered = False
+            for candidate_result in candidate_results:
+                candidate_result.recovered = False
             verdict = INCONCLUSIVE
         elif any(candidate.recovered for candidate in candidate_results):
             verdict = TRIGGER_RECOVERED

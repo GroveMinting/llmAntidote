@@ -9,6 +9,8 @@ from collections import Counter, deque
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
+from .capabilities import tool_family
+
 logger = logging.getLogger("llm_antidote.audit")
 
 
@@ -35,31 +37,10 @@ class MetadataAudit:
 
     @staticmethod
     def tool_identity(value: str) -> tuple[str, str]:
-        clean = value.lower().strip()
-        exact = {
-            "terminal",
-            "execute_code",
-            "read_file",
-            "write_file",
-            "patch",
-            "search_files",
-            "computer_use",
-            "clarify",
-        }
-        if clean in exact:
-            family = clean
-        elif clean.startswith("web_"):
-            family = "web"
-        elif clean.startswith("browser_"):
-            family = "browser"
-        elif clean.startswith("mcp__"):
-            family = "mcp"
-        elif clean.startswith("connectors__"):
-            family = "connector"
-        else:
-            family = "plugin_or_unknown"
-        reference = hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:12]
-        return family, reference
+        return (
+            tool_family(value),
+            hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:12],
+        )
 
     def record(
         self,

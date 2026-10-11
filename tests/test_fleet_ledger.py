@@ -13,6 +13,10 @@ from llm_antidote.fleet_crypto import (
 from llm_antidote.fleet_ledger import (
     fleet_summary,
     ingest_receipt,
+    ledger_allow_signer,
+    ledger_revoke_signer,
+    ledger_rotate_signer,
+    ledger_trust_state,
     list_receipts,
     validate_receipt,
 )
@@ -110,3 +114,80 @@ def test_ledger_refuses_symlink_database(tmp_path):
     linked.symlink_to(target)
     with pytest.raises(ValueError, match="non-symlink"):
         ingest_receipt(linked, receipt_path, signature_path, fixture["public"])
+
+
+def _signed_receipt(tmp_path, fixture, receipt, private, name):
+    document = sign_document(receipt, private)
+    path = write_json_document(document, tmp_path / name)
+    return document["key_id"], path
+
+
+def test_ledger_signer_allowlist_and_revocation(tmp_path):
+    fixture = admission_fixture(tmp_path)
+    receipt = evaluate(fixture)
+    receipt_path = write_json_document(receipt, tmp_path / "receipt.json")
+    first_key_id, first_sig = _signed_receipt(
+        tmp_path, fixture, receipt, fixture["private"], "first.sig.json"
+    )
+    database = tmp_path / "fleet.db"
+    assert ingest_receipt(database, receipt_path, first_sig, fixture["public"])
+
+    other_private, other_public, _ = generate_keypair(
+        tmp_path / "other-private.pem", tmp_path / "other-public.pem"
+    )
+    other_key_id, other_sig = _signed_receipt(
+        tmp_path, fixture, receipt, other_private, "other.sig.json"
+    )
+    with pytest.raises(ValueError, match="trust root"):
+        ingest_receipt(database, receipt_path, other_sig, other_public)
+
+    ledger_allow_signer(database, other_key_id)
+    ingest_receipt(database, receipt_path, other_sig, other_public)
+    assert set(ledger_trust_state(database)["allowed"]) == {first_key_id, other_key_id}
+
+    ledger_revoke_signer(database, first_key_id)
+    with pytest.raises(ValueError, match="revoked"):
+        ingest_receipt(database, receipt_path, first_sig, fixture["public"])
+
+
+def test_ledger_rotate_signer(tmp_path):
+    fixture = admission_fixture(tmp_path)
+    receipt = evaluate(fixture)
+    receipt_path = write_json_document(receipt, tmp_path / "receipt.json")
+    first_key_id, first_sig = _signed_receipt(
+        tmp_path, fixture, receipt, fixture["private"], "first.sig.json"
+    )
+    database = tmp_path / "fleet.db"
+    assert ingest_receipt(database, receipt_path, first_sig, fixture["public"])
+
+    other_private, _other_public, _ = generate_keypair(
+        tmp_path / "other-private.pem", tmp_path / "other-public.pem"
+    )
+    other_key_id, _other_sig = _signed_receipt(
+        tmp_path, fixture, receipt, other_private, "other.sig.json"
+    )
+    state = ledger_rotate_signer(
+        database, new_key_id=other_key_id, old_key_id=first_key_id
+    )
+    assert state["allowed"] == [other_key_id]
+    assert first_key_id in state["revoked"]
+
+
+def test_ledger_migrates_legacy_signer_pin(tmp_path):
+    fixture = admission_fixture(tmp_path)
+    receipt = evaluate(fixture)
+    receipt_path = write_json_document(receipt, tmp_path / "receipt.json")
+    key_id, sig = _signed_receipt(
+        tmp_path, fixture, receipt, fixture["private"], "first.sig.json"
+    )
+    database = tmp_path / "fleet.db"
+    assert ingest_receipt(database, receipt_path, sig, fixture["public"])
+    with sqlite3.connect(database) as connection:
+        connection.execute("DELETE FROM metadata WHERE key = 'receipt_signer_key_ids'")
+        connection.execute(
+            "INSERT OR REPLACE INTO metadata(key, value) VALUES('receipt_signer_key_id', ?)",
+            (key_id,),
+        )
+        connection.commit()
+    summary = fleet_summary(database)
+    assert summary["receipt_signer_key_ids"] == [key_id]

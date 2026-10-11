@@ -4,7 +4,7 @@ from llm_antidote.state import SessionRiskStore
 
 def test_session_taint_expires():
     now = [0.0]
-    store = SessionRiskStore(ttl_minutes=1, clock=lambda: now[0])
+    store = SessionRiskStore(taint_ttl_minutes=1, clock=lambda: now[0])
     store.mark("session-a", ("environment_secret",))
     assert store.is_tainted("session-a")
     now[0] = 61.0
@@ -32,11 +32,23 @@ def test_concurrent_pending_reservations_are_counted():
 
 def test_pending_expires_with_ttl():
     now = [0.0]
-    store = SessionRiskStore(ttl_minutes=1, clock=lambda: now[0])
+    store = SessionRiskStore(pending_ttl_minutes=1, clock=lambda: now[0])
     store.reserve_pending(("session-a",))
     assert store.has_pending("session-a")
     now[0] = 61.0
     assert not store.has_pending("session-a")
+
+
+def test_pending_expires_independently_of_taint():
+    now = [0.0]
+    store = SessionRiskStore(
+        taint_ttl_minutes=60, pending_ttl_minutes=1, clock=lambda: now[0]
+    )
+    store.mark("session-a", ("environment_secret",))
+    store.reserve_pending(("session-a",))
+    now[0] = 61.0
+    assert not store.has_pending("session-a")
+    assert store.is_tainted("session-a")
 
 
 def test_pending_and_taint_share_session_aliases():
@@ -53,6 +65,24 @@ def test_clear_removes_pending_state():
     store = SessionRiskStore()
     store.reserve_pending(("session-a",))
     store.clear("session-a")
+    assert not store.has_pending("session-a")
+
+
+def test_pending_reservation_is_released_by_exact_call_id():
+    store = SessionRiskStore()
+    store.reserve_pending(("session-a",), call_id="call-1")
+    assert store.has_pending("session-a")
+    store.release_pending(("session-a",), call_id="call-2")
+    assert store.has_pending("session-a")
+    store.release_pending(("session-a",), call_id="call-1")
+    assert not store.has_pending("session-a")
+
+
+def test_pending_reservation_is_idempotent_per_call_id():
+    store = SessionRiskStore()
+    store.reserve_pending(("session-a",), call_id="call-1")
+    store.reserve_pending(("session-a",), call_id="call-1")
+    store.release_pending(("session-a",), call_id="call-1")
     assert not store.has_pending("session-a")
 
 

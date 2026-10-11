@@ -1,0 +1,3 @@
+# Runtime dependencies. Kept in sync with [project].dependencies in pyproject.toml
+# so `pip-audit -r requirements.txt` can gate known vulnerabilities in CI.
+cryptography>=42

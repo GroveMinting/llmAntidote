@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import Any
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, cast
 
 from .audit import MetadataAudit
 from .commands import run_cli, setup_cli
@@ -17,6 +18,9 @@ _MISSING = object()
 _SETTING_KEYS = (
     "mode",
     "taint_ttl_minutes",
+    "pending_ttl_minutes",
+    "taint_scope",
+    "max_scan_bytes",
     "audit_capacity",
     "safe_read_roots",
     "sensitive_roots",
@@ -27,6 +31,7 @@ _SETTING_KEYS = (
     "admission_policy_public_key",
     "admission_trusted_policy_sha256",
     "admission_require_model_binding",
+    "admission_require_route_observation",
     "admission_model_lock_path",
     "admission_model_source",
     "admission_model_name",
@@ -35,8 +40,12 @@ _NON_RESERVING_CATEGORIES = {"oversized_arguments"}
 _SETTING_DEFAULTS = {
     "mode": "balanced",
     "taint_ttl_minutes": "60",
+    "pending_ttl_minutes": "5",
+    "taint_scope": "egress_persist_shell",
+    "max_scan_bytes": "1048576",
     "audit_capacity": "200",
     "admission_require_model_binding": "true",
+    "admission_require_route_observation": "true",
 }
 
 
@@ -89,18 +98,43 @@ class AntidoteRuntime:
     audit: MetadataAudit
     routes: RuntimeRoutes
     binding: RuntimePolicyBinding
+    anonymous_key: str = field(default_factory=lambda: f"anonymous-{uuid.uuid4().hex}")
 
     def session_keys(self, session_id: str = "", task_id: str = "") -> tuple[str, ...]:
-        keys = tuple(dict.fromkeys(value for value in (session_id, task_id) if value))
-        return keys or ("unknown",)
+        """Correlate by session id, falling back to task id, else a per-instance key.
 
-    def route_admitted(self) -> bool:
-        if not self.binding.enforced or not self.binding.model_name:
-            return True
+        Deliberately never merges session and task ids: a shared/global task id must
+        not join unrelated sessions, and sessions without ids must not collapse into
+        one shared bucket.
+        """
+        for value in (session_id, task_id):
+            if value:
+                return (str(value),)
+        return (self.anonymous_key,)
+
+    def route_admission(self) -> tuple[bool, str]:
+        """Whether tool calls may proceed given the enforced model binding.
+
+        In enforced mode with a bound model, admission requires a positively
+        observed route whose model matches the admitted model. An unobserved route
+        or an empty model string is treated as unadmitted when
+        ``require_route_observation`` is set (the default), closing the fail-open
+        window before the first API request.
+        """
+        binding = self.binding
+        if not binding.enforced or not binding.model_name:
+            return True, ""
         observed = str(self.routes.snapshot().get("model") or "")
         if not observed:
-            return True
-        return observed == self.binding.model_name
+            if binding.require_route_observation:
+                return False, "admission.model_route_unobserved"
+            return True, ""
+        if observed != binding.model_name:
+            return False, "admission.model_route_mismatch"
+        return True, ""
+
+    def route_admitted(self) -> bool:
+        return self.route_admission()[0]
 
     def decide(
         self,
@@ -109,18 +143,26 @@ class AntidoteRuntime:
         args: Any,
         session_id: str = "",
         task_id: str = "",
+        tool_call_id: str = "",
     ) -> PolicyDecision:
         keys = self.session_keys(session_id, task_id)
-        self.risks.link(keys)
-        if not self.route_admitted():
+        admitted, reason = self.route_admission()
+        if not admitted:
+            if reason == "admission.model_route_unobserved":
+                message = (
+                    "llmAntidote blocked a tool call because the served model route has not been "
+                    "verified."
+                )
+            else:
+                message = (
+                    "llmAntidote blocked a tool call because the served model does not match the "
+                    "admitted model route."
+                )
             decision = PolicyDecision(
                 action="block",
                 would_action="block",
-                rule_ids=("admission.model_route_mismatch",),
-                message=(
-                    "llmAntidote blocked a tool call because the served model does not match the "
-                    "admitted model route."
-                ),
+                rule_ids=(reason,),
+                message=message,
             )
             self.audit.record(
                 action=decision.action,
@@ -150,7 +192,7 @@ class AntidoteRuntime:
             and decision.action != "block"
             and _reserves_access(decision)
         ):
-            self.risks.reserve_pending(keys)
+            self.risks.reserve_pending(keys, tool_call_id)
         return decision
 
     def post_tool(
@@ -163,53 +205,53 @@ class AntidoteRuntime:
         error_type: Any = None,
         session_id: str = "",
         task_id: str = "",
+        tool_call_id: str = "",
     ) -> None:
         keys = self.session_keys(session_id, task_id)
         if not _tool_succeeded(status, error_type, result):
-            self.risks.release_pending(keys)
+            self.risks.release_pending(keys, tool_call_id)
             return
         decision = self.engine.assess(tool_name, args, session_tainted=False)
-        self.risks.release_pending(keys)
+        self.risks.release_pending(keys, tool_call_id)
         if decision.sensitive:
             self.risks.mark_many(keys, decision.sensitive)
 
     def observe_route(self, *, provider: Any = "", model: Any = "", base_url: Any = "") -> None:
         self.routes.observe(provider=provider, model=model, base_url=base_url)
-        if self.binding.enforced and not self.route_admitted():
-            self.audit.record(
-                action="block",
-                would_action="block",
-                tool_name="pre_api_request",
-                rule_ids=("admission.model_route_mismatch",),
-                session_key="route",
-            )
+        if self.binding.enforced:
+            admitted, reason = self.route_admission()
+            if not admitted and reason == "admission.model_route_mismatch":
+                self.audit.record(
+                    action="block",
+                    would_action="block",
+                    tool_name="pre_api_request",
+                    rule_ids=(reason,),
+                    session_key="route",
+                )
 
     def status(self) -> dict[str, object]:
+        admitted, reason = self.route_admission()
         return {
             "mode": self.mode,
             "risk": self.risks.summary(),
             "audit": self.audit.summary(),
             "runtime_route": self.routes.snapshot(),
             "admission": self.binding.summary(),
-            "route_admitted": self.route_admitted(),
+            "route_admitted": admitted,
+            "route_reason": reason,
         }
 
     def status_text(self) -> str:
         status = self.status()
-        risk = status["risk"]
-        audit = status["audit"]
-        route = status["runtime_route"]
-        admission = status["admission"]
-        assert (
-            isinstance(risk, dict)
-            and isinstance(audit, dict)
-            and isinstance(route, dict)
-            and isinstance(admission, dict)
-        )
+        risk = cast(dict[str, Any], status["risk"])
+        audit = cast(dict[str, Any], status["audit"])
+        route = cast(dict[str, Any], status["runtime_route"])
+        admission = cast(dict[str, Any], status["admission"])
         categories = ", ".join(risk.get("categories", [])) or "none"
         model = route.get("model") or "not observed"
         provider = route.get("provider") or "not observed"
-        policy = admission.get("policy") if isinstance(admission.get("policy"), dict) else {}
+        raw_policy = admission.get("policy")
+        policy: dict[str, Any] = raw_policy if isinstance(raw_policy, dict) else {}
         policy_line = "standalone (unsigned local settings)"
         if admission.get("enforcement") == "enforced":
             policy_line = (
@@ -237,7 +279,7 @@ def build_runtime(ctx: Any) -> AntidoteRuntime:
     return AntidoteRuntime(
         mode=resolved.policy.mode,
         engine=PolicyEngine(resolved.policy),
-        risks=SessionRiskStore(resolved.taint_ttl_minutes),
+        risks=SessionRiskStore(resolved.taint_ttl_minutes, resolved.pending_ttl_minutes),
         audit=MetadataAudit(resolved.audit_capacity),
         routes=RuntimeRoutes(),
         binding=resolved.binding,
@@ -252,6 +294,8 @@ def register(ctx: Any) -> None:
         args: Any = None,
         session_id: str = "",
         task_id: str = "",
+        tool_call_id: str = "",
+        turn_id: str = "",
         **_: Any,
     ) -> dict[str, str] | None:
         decision = runtime.decide(
@@ -259,6 +303,7 @@ def register(ctx: Any) -> None:
             args=args,
             session_id=session_id,
             task_id=task_id,
+            tool_call_id=tool_call_id or turn_id,
         )
         if decision.action == "block":
             return {"action": "block", "message": decision.message}
@@ -279,6 +324,8 @@ def register(ctx: Any) -> None:
         error_type: Any = None,
         session_id: str = "",
         task_id: str = "",
+        tool_call_id: str = "",
+        turn_id: str = "",
         **_: Any,
     ) -> None:
         runtime.post_tool(
@@ -289,6 +336,7 @@ def register(ctx: Any) -> None:
             error_type=error_type,
             session_id=session_id,
             task_id=task_id,
+            tool_call_id=tool_call_id or turn_id,
         )
 
     def pre_api_request(

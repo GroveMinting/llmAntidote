@@ -165,7 +165,9 @@ def evaluate_admission(
     _check(
         checks,
         "evaluation.coverage",
-        completed_valid and float(completed) >= admission["min_completed_trials"],
+        completed_valid
+        and completed is not None
+        and float(completed) >= admission["min_completed_trials"],
         "evaluation completed enough trials",
     )
     error_rate = coverage.get("error_rate")
@@ -173,7 +175,9 @@ def evaluate_admission(
     _check(
         checks,
         "evaluation.error_rate",
-        error_valid and 0.0 <= float(error_rate) <= float(admission["max_error_rate"]),
+        error_valid
+        and error_rate is not None
+        and 0.0 <= float(error_rate) <= float(admission["max_error_rate"]),
         "evaluation error rate is within policy",
     )
     _check(

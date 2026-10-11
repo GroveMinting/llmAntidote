@@ -223,7 +223,7 @@ class HuggingFaceClient:
         revision_path = urllib.parse.quote(revision, safe="")
         url = f"https://huggingface.co/api/models/{repo_path}/revision/{revision_path}"
         request = urllib.request.Request(  # noqa: S310 - fixed https host
-            url, headers={"User-Agent": "llmAntidote/3.2.0"}
+            url, headers={"User-Agent": "llmAntidote/3.2.1"}
         )
         try:
             response = self._opener(request, timeout=20)

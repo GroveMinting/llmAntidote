@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented here.
 
+## 3.2.1 - 2026-10-11
+
+Follow-up corrections to the 3.2.0 hardening pass.
+
+- Track pending reservations per session: `SessionRisk.pending_ids` replaces the
+  single global `call_id` map, so two sessions that reuse a `tool_call_id` (e.g.
+  per-session counters, resumed sessions) each keep their own reservation and can
+  no longer drop or cross-release the other's. Fixes a fail-open window.
+- Apply the oversized-arguments gate to the scanned (content-excluded) text for
+  write tools, so `write_file`/`patch` carrying more than `max_scan_bytes` of
+  content is allowed again while oversized `terminal`/`execute_code` still blocks.
+- Refuse admission with `admission.model_route_unconfigured` when enforcement is
+  on and model binding is required but `admission_model_name` is empty, instead of
+  admitting without any route check. `/antidote status` now prints the route
+  reason, and registration logs the enforcement configuration (with a warning for
+  the unconfigured case).
+- Document the single-call `terminal`/`execute_code` read+exfil residual and the
+  enforced-mode `pre_api_request` dependency.
+- Align the documented coverage floor with CI (80% branch).
+
 ## 3.2.0 - 2026-10-11
 
 Hardening pass derived from `docs/IMPROVEMENT_LIST.md` (live-review findings
@@ -37,7 +57,7 @@ against v3.1.0). See `docs/ROADMAP.md`.
 - Add a real-Hermes end-to-end hook harness (`tests/integration/hermes_e2e.py`)
   and a CI job that drives standalone and enforced scenarios through Hermes'
   plugin manager.
-- Tooling: `mypy`, coverage floor (85%), `pip-audit`, and `ruff` `S` rules in CI;
+- Tooling: `mypy`, coverage floor (80% branch), `pip-audit`, and `ruff` `S` rules in CI;
   add Python 3.13 to the matrix.
 
 ## 3.1.0 - 2026-10-10

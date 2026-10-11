@@ -255,9 +255,11 @@ signed policy and a verified model binding and the plugin will refuse to
 register unless both verify. The signed policy's runtime mode and taint TTL
 become authoritative, and tool calls are blocked if the served model route stops
 matching the admitted model. In enforced mode an unobserved or empty model route
-also fails closed unless `admission_require_route_observation: "false"` is set.
-Use `llm-antidote fleet runtime-verify --settings SETTINGS.json` as an external
-supervisor/startup probe. See
+also fails closed unless `admission_require_route_observation: "false"` is set,
+and if model binding is required but `admission_model_name` is empty, tool calls
+are blocked with `admission.model_route_unconfigured` (shown by `/antidote
+status` and the startup log). Use `llm-antidote fleet runtime-verify --settings
+SETTINGS.json` as an external supervisor/startup probe. See
 [`docs/FLEET_ADMISSION.md`](docs/FLEET_ADMISSION.md).
 
 ## Decision Flow

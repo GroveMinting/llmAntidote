@@ -232,6 +232,20 @@ def test_enforced_route_observation_optional(tmp_path):
     assert ctx.hooks["pre_tool_call"](tool_name="read_file", args={"path": "/work/x"}) is None
 
 
+def test_enforced_route_binding_fails_closed_without_configured_model(tmp_path):
+    fixture = enforced_fixture(tmp_path)
+    settings = dict(fixture["settings"], admission_model_name="")
+    ctx = FakeContext(settings)
+    register(ctx)
+    runtime = build_runtime(ctx)
+    assert runtime.status()["route_admitted"] is False
+    assert runtime.status()["route_reason"] == "admission.model_route_unconfigured"
+    assert "route reason: admission.model_route_unconfigured" in runtime.status_text()
+    blocked = ctx.hooks["pre_tool_call"](tool_name="read_file", args={"path": "/work/x"})
+    assert blocked["action"] == "block"
+    assert "no admitted model is configured" in blocked["message"]
+
+
 def test_standalone_resolves_pending_ttl_default(tmp_path):
     resolved = load_runtime_settings({"mode": "balanced"})
     assert resolved.pending_ttl_minutes == 5

@@ -58,6 +58,31 @@ def test_redirects_are_refused_by_handler():
     assert handler.redirect_request(None, None, 302, "", None, "https://evil.example") is None
 
 
+def test_redirect_to_same_host_is_still_refused():
+    handler = _NoRedirect()
+    assert handler.redirect_request(None, None, 302, "", None, "http://127.0.0.1:8000/v1") is None
+
+
+def test_trusted_host_with_pinned_port_rejects_unexpected_port():
+    url, _ = normalize_endpoint(
+        "http://spark:8000/v1", trusted_hosts=("spark:8000",)
+    )
+    assert url == "http://spark:8000/v1/chat/completions"
+    with pytest.raises(ValueError, match="loopback"):
+        normalize_endpoint("http://spark:9999/v1", trusted_hosts=("spark:8000",))
+
+
+def test_trusted_bare_host_allows_any_port():
+    url, display = normalize_endpoint("http://spark:9999/v1", trusted_hosts=("spark",))
+    assert url == "http://spark:9999/v1/chat/completions"
+    assert display == "spark:9999"
+
+
+def test_credentials_in_url_are_refused_even_when_trusted():
+    with pytest.raises(ValueError, match="credentials"):
+        normalize_endpoint("http://user:pass@spark:8000/v1", trusted_hosts=("spark",))
+
+
 
 def test_client_parses_tool_calls(monkeypatch):
     monkeypatch.setenv("LOCAL_MODEL_KEY", "secret-not-recorded")

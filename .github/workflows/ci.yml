@@ -52,3 +52,30 @@ jobs:
           PYTHONPATH: /tmp/hermes-agent
         run: |
           python -c 'from pathlib import Path; from hermes_cli.plugin_validate import validate_plugin_dir; result = validate_plugin_dir(Path(".")); print(result.to_dict()); raise SystemExit(result.exit_code)'
+
+  hermes-plugin-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install plugin and validation dependencies
+        run: python -m pip install -e . 'packaging>=20' 'PyYAML>=6,<7' 'ruamel.yaml>=0.18,<0.19'
+      - name: Fetch pinned Hermes Agent 0.21.5 source
+        run: |
+          git init /tmp/hermes-agent
+          git -C /tmp/hermes-agent remote add origin https://github.com/NousResearch/hermes-agent.git
+          git -C /tmp/hermes-agent sparse-checkout init --cone
+          git -C /tmp/hermes-agent sparse-checkout set hermes_cli plugins tools agent pm gateway hermes_platform
+          git -C /tmp/hermes-agent fetch --depth 1 origin f97608f178d1ffeca59860195ab7da295f7c8e5f
+          git -C /tmp/hermes-agent checkout --detach FETCH_HEAD
+      - name: Drive real Hermes hooks (standalone)
+        env:
+          PYTHONPATH: /tmp/hermes-agent
+        run: python tests/integration/hermes_e2e.py --mode standalone
+      - name: Drive real Hermes hooks (enforced)
+        env:
+          PYTHONPATH: /tmp/hermes-agent
+        run: python tests/integration/hermes_e2e.py --mode enforced

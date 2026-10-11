@@ -61,7 +61,13 @@ match static rules. The capability classifier is a name-based heuristic: an
 unknown plugin tool is treated as potentially outbound and routed to approval,
 which can be noisy but fails closed. The bridge `tool_call` is treated as an
 intentionally-unknown egress/exec tool rather than inspecting its deferred
-target. If Hermes authorizes an outbound call before the sensitive-read pre-hook
+target. Path classification applies to the dedicated read tools
+(`read_file`/`list_files`/`search_files`), so a single `terminal`/`execute_code`
+call that reads an unrecognized filename and sends it through a method outside
+the sink regex (raw socket, arbitrary subprocess, DNS) is not caught in that same
+call; the cross-call read-then-exfil sequence is caught by pending/taint, and the
+single-call shape relies on OS egress controls. If Hermes authorizes an outbound
+call before the sensitive-read pre-hook
 in the same batch, per-call state cannot cover the batch; outbound message tools
 still require approval, and in a batch the model cannot include a secret the read
 has not yet returned. Run untrusted agents without production secrets and enforce

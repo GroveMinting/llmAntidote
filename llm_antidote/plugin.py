@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -13,6 +14,8 @@ from .deployment import RuntimePolicyBinding, load_runtime_settings
 from .policy import PolicyDecision, PolicyEngine
 from .runtime import RuntimeRoutes
 from .state import SessionRiskStore
+
+logger = logging.getLogger("llm_antidote.plugin")
 
 _MISSING = object()
 _SETTING_KEYS = (
@@ -119,10 +122,17 @@ class AntidoteRuntime:
         observed route whose model matches the admitted model. An unobserved route
         or an empty model string is treated as unadmitted when
         ``require_route_observation`` is set (the default), closing the fail-open
-        window before the first API request.
+        window before the first API request. If model binding is required but no
+        admitted model is configured, admission is refused
+        (``admission.model_route_unconfigured``) rather than silently skipping the
+        route check.
         """
         binding = self.binding
-        if not binding.enforced or not binding.model_name:
+        if not binding.enforced:
+            return True, ""
+        if not binding.model_name:
+            if binding.verified:
+                return False, "admission.model_route_unconfigured"
             return True, ""
         observed = str(self.routes.snapshot().get("model") or "")
         if not observed:
@@ -152,6 +162,11 @@ class AntidoteRuntime:
                 message = (
                     "llmAntidote blocked a tool call because the served model route has not been "
                     "verified."
+                )
+            elif reason == "admission.model_route_unconfigured":
+                message = (
+                    "llmAntidote blocked a tool call because enforcement is on and model binding "
+                    "is required, but no admitted model is configured (admission_model_name)."
                 )
             else:
                 message = (
@@ -266,6 +281,7 @@ class AntidoteRuntime:
             f"- policy: {policy_line}\n"
             f"- admitted model: {admitted}\n"
             f"- route admitted: {status.get('route_admitted')}\n"
+            f"- route reason: {status.get('route_reason') or 'ok'}\n"
             f"- tainted sessions: {risk.get('tainted_sessions', 0)}\n"
             f"- pending sensitive access: {risk.get('pending_sessions', 0)}\n"
             f"- taint categories: {categories}\n"
@@ -288,6 +304,20 @@ def build_runtime(ctx: Any) -> AntidoteRuntime:
 
 def register(ctx: Any) -> None:
     runtime = build_runtime(ctx)
+    binding = runtime.binding
+    logger.info(
+        "llmAntidote active: enforcement=%s mode=%s model_bound=%s route_observation_required=%s",
+        "enforced" if binding.enforced else "standalone",
+        runtime.mode,
+        bool(binding.model_name),
+        binding.require_route_observation,
+    )
+    if binding.enforced and binding.verified and not binding.model_name:
+        logger.warning(
+            "llmAntidote enforcement is on and model binding is required, but no admitted "
+            "model is configured (admission_model_name is empty); tool calls will be blocked "
+            "with admission.model_route_unconfigured until it is set."
+        )
 
     def pre_tool_call(
         tool_name: str = "",

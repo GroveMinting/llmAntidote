@@ -22,6 +22,20 @@ marked with their status.
   unknown-key/trusted-host regression tests.
 - **P3 tooling** - mypy, coverage floor, pip-audit, ruff `S`, Python 3.13.
 
+## Shipped in 3.2.1
+
+- **P1 pending correlation** - pending reservations are tracked per session
+  (`pending_ids` on the session's risk item) instead of one global `call_id` map,
+  so sessions that reuse a `tool_call_id` can no longer drop or cross-release each
+  other's reservations.
+- **P1.2 write false positive** - the oversized-arguments gate now applies to the
+  scanned (content-excluded) text for write tools, so large file content and big
+  patches are allowed again while oversized commands still block.
+- **P1.1 route config footgun** - enforced mode with required model binding and an
+  empty `admission_model_name` now refuses admission
+  (`admission.model_route_unconfigured`); `/antidote status` reports the route
+  reason and registration logs the enforcement configuration.
+
 ## Open
 
 ### P2 - Evaluation / fleet
@@ -35,6 +49,13 @@ marked with their status.
 ### P2 - Robustness
 - Indirection-resistant exfil detection: token assembly (`"cu"+"rl"`) still evades
   the deterministic rules by design; consider shell-aware normalization.
+- Single-call read+exfil through `terminal`/`execute_code`: path classification
+  covers `read_file`/`list_files`/`search_files`, but a first call that reads an
+  unrecognized filename and transmits it via a method outside the sink regex
+  (raw socket, arbitrary subprocess, DNS) is not caught in the same call. Cross-call
+  taint catches the read-then-exfil sequence; the single-call shape rests on OS
+  egress controls. Needs content/flow-aware inspection of script bodies to close
+  deterministically.
 - Audit/decision telemetry beyond the bounded in-memory ring (opt-in exporters).
 
 ### P3 - Tooling / docs

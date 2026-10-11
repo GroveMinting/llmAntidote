@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 class SessionRisk:
     categories: set[str] = field(default_factory=set)
     pending: int = 0
+    pending_ids: set[str] = field(default_factory=set)
     updated_at: float = 0.0
     pending_at: float = 0.0
 
@@ -47,7 +48,6 @@ class SessionRiskStore:
         self._pending_seconds = _bounded_minutes(pending_ttl_minutes, 5) * 60
         self._clock = clock
         self._items: dict[str, SessionRisk] = {}
-        self._pending_owner: dict[str, tuple[str, ...]] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -67,6 +67,7 @@ class SessionRiskStore:
             item.categories.clear()
         if item.pending > 0 and now - item.pending_at > self._pending_seconds:
             item.pending = 0
+            item.pending_ids.clear()
         if not item.categories and item.pending <= 0:
             self._items.pop(key, None)
             return None
@@ -82,6 +83,7 @@ class SessionRiskStore:
                 continue
             item.categories.update(other.categories)
             item.pending = max(item.pending, other.pending)
+            item.pending_ids.update(other.pending_ids)
             item.updated_at = max(item.updated_at, other.updated_at)
             item.pending_at = max(item.pending_at, other.pending_at)
             for alias, value in tuple(self._items.items()):
@@ -109,20 +111,23 @@ class SessionRiskStore:
     def reserve_pending(self, keys: tuple[str, ...], call_id: str = "") -> None:
         """Record that a permitted sensitive access is executing and unresolved.
 
-        When ``call_id`` is provided the reservation is idempotent and released by
-        the exact same id, so concurrent calls in one session cannot collide or be
-        released by an unrelated post hook.
+        When ``call_id`` is provided the reservation is idempotent per session and
+        released by the exact same id, so concurrent calls in one session cannot
+        collide or be released by an unrelated post hook. Tracking is scoped to the
+        session's own risk item, so two sessions reusing the same ``call_id`` (e.g.
+        per-session counters or resumed sessions) each keep their own reservation
+        and cannot release each other's.
         """
         now = self._clock()
         unique_keys = self._unique(keys)
         with self._lock:
-            if call_id:
-                if call_id in self._pending_owner:
-                    return
-                self._pending_owner[call_id] = unique_keys
             item = self._merge(unique_keys)
             if item is None:
                 item = SessionRisk()
+            if call_id:
+                if call_id in item.pending_ids:
+                    return
+                item.pending_ids.add(call_id)
             item.pending += 1
             item.updated_at = now
             item.pending_at = now
@@ -133,16 +138,14 @@ class SessionRiskStore:
         """Resolve a pending reservation regardless of success or failure."""
         now = self._clock()
         with self._lock:
-            if call_id:
-                owner_keys = self._pending_owner.pop(call_id, None)
-                if owner_keys is None:
-                    return
-                unique_keys = owner_keys
-            else:
-                unique_keys = self._unique(keys)
+            unique_keys = self._unique(keys)
             item = self._merge(unique_keys)
             if item is None:
                 return
+            if call_id:
+                if call_id not in item.pending_ids:
+                    return
+                item.pending_ids.discard(call_id)
             item.pending = max(0, item.pending - 1)
             item.updated_at = now
             item.pending_at = now
@@ -164,22 +167,16 @@ class SessionRiskStore:
 
     def clear(self, *keys: str) -> None:
         with self._lock:
-            removed: set[str] = set()
             for key in keys:
                 item = self._items.get(key) if key else None
                 if item is not None:
                     for alias, value in tuple(self._items.items()):
                         if value is item:
                             self._items.pop(alias, None)
-                            removed.add(alias)
-            for call_id, owner_keys in tuple(self._pending_owner.items()):
-                if any(alias in removed for alias in owner_keys):
-                    del self._pending_owner[call_id]
 
     def clear_all(self) -> None:
         with self._lock:
             self._items.clear()
-            self._pending_owner.clear()
 
     def summary(self) -> dict[str, object]:
         with self._lock:

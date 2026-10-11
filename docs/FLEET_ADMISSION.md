@@ -215,6 +215,16 @@ served route corresponds to the admitted lockfile requires a controlled
 serving/deployment process; llmAntidote verifies the binding you configure, not
 the serving stack itself.
 
+> **Warning.** Enforced mode depends on the Hermes `pre_api_request` hook firing
+> with a non-empty model. If a future Hermes release stops emitting that hook,
+> the route stays unobserved and every tool call is blocked (fail closed). If
+> model binding is required (`admission_require_model_binding`) but
+> `admission_model_name` is empty, llmAntidote refuses admission with
+> `admission.model_route_unconfigured` rather than skipping the route check; the
+> plugin still registers, and `/antidote status` plus the startup log report the
+> reason. Set `admission_model_name` (and keep `admission_require_route_observation`
+> enabled) to restore tool use.
+
 ### Startup Health Probe
 
 A pre-tool hook only fails closed after the plugin has registered. Add an

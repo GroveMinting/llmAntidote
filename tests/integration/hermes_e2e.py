@@ -170,7 +170,7 @@ def main() -> int:
 
     from hermes_cli import plugins
 
-    plugins.get_plugin_manager().discover_and_load(force=True)
+    plugins.discover_plugins()
 
     check = _Checker()
     if args.mode == "standalone":

@@ -27,7 +27,7 @@ def test_inventory_tools_are_classified_or_explicitly_unknown():
 
 
 def test_classifier_version_is_bumped():
-    assert CAPABILITY_CLASSIFIER_VERSION == "2"
+    assert CAPABILITY_CLASSIFIER_VERSION == "3"
 
 
 def test_real_tool_surface_capabilities():
@@ -36,7 +36,7 @@ def test_real_tool_surface_capabilities():
         "session_search": ToolCapability.LOCAL_READ,
         "todo_list": ToolCapability.LOCAL_READ,
         "write_file": ToolCapability.LOCAL_WRITE,
-        "text_to_speech": ToolCapability.LOCAL_WRITE,
+        "text_to_speech": ToolCapability.OUTBOUND_NETWORK,
         "memory": ToolCapability.PERSIST,
         "skill_manage": ToolCapability.PERSIST,
         "cronjob_manage": ToolCapability.PERSIST,
@@ -51,6 +51,12 @@ def test_real_tool_surface_capabilities():
     }
     for name, capability in cases.items():
         assert classify_tool(name).capability is capability, name
+
+
+def test_text_to_speech_is_outbound():
+    profile = classify_tool("text_to_speech")
+    assert profile.capability is ToolCapability.OUTBOUND_NETWORK
+    assert profile.outbound is True
 
 
 def test_persist_capability_is_not_marked_outbound():

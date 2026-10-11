@@ -292,3 +292,24 @@ def test_taint_scope_all_blocks_local_writes():
     assert (
         engine.assess("read_file", {"path": "/work/x"}, session_tainted=True).action == "allow"
     )
+
+
+def test_tainted_session_blocks_text_to_speech():
+    engine = PolicyEngine(PolicyConfig(mode="balanced", safe_read_roots=("/work",)))
+    decision = engine.assess("text_to_speech", {"text": "the secret is 1234"}, session_tainted=True)
+    assert decision.action == "block"
+    assert decision.rule_ids == ("exfil.tainted_session_egress",)
+
+
+def test_untainted_plain_text_to_speech_is_allowed():
+    engine = PolicyEngine(PolicyConfig(mode="balanced", safe_read_roots=("/work",)))
+    decision = engine.assess("text_to_speech", {"text": "hello world"})
+    assert decision.action == "allow"
+    assert not decision.rule_ids
+
+
+def test_oversized_text_to_speech_payload_is_refused():
+    engine = PolicyEngine(PolicyConfig(mode="balanced", max_scan_bytes=4096))
+    decision = engine.assess("text_to_speech", {"text": "x" * 9000})
+    assert decision.action == "block"
+    assert decision.rule_ids == ("input.arguments_exceed_scan_limit",)

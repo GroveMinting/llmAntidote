@@ -25,7 +25,15 @@ from .fleet_crypto import (
     verify_json_file,
     write_json_document,
 )
-from .fleet_ledger import fleet_summary, ingest_receipt, list_receipts
+from .fleet_ledger import (
+    fleet_summary,
+    ingest_receipt,
+    ledger_allow_signer,
+    ledger_revoke_signer,
+    ledger_rotate_signer,
+    ledger_trust_state,
+    list_receipts,
+)
 from .fleet_policy import default_policy, load_policy, policy_digest
 from .model_inspector import InspectionReport, inspect_model
 from .model_lock import create_lock, load_lock, verify_lock, write_lock
@@ -171,6 +179,27 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     ledger_summary.add_argument("--database", required=True)
     ledger_summary.add_argument("--json", action="store_true", dest="as_json")
     ledger_summary.set_defaults(antidote_handler="fleet_ledger_summary")
+    ledger_trust = ledger_commands.add_parser("trust", help="Show the ledger signer trust root")
+    ledger_trust.add_argument("--database", required=True)
+    ledger_trust.add_argument("--json", action="store_true", dest="as_json")
+    ledger_trust.set_defaults(antidote_handler="fleet_ledger_trust")
+    ledger_allow = ledger_commands.add_parser("allow-signer", help="Allow a receipt signer key id")
+    ledger_allow.add_argument("--database", required=True)
+    ledger_allow.add_argument("--key-id", required=True, dest="key_id")
+    ledger_allow.set_defaults(antidote_handler="fleet_ledger_allow")
+    ledger_revoke = ledger_commands.add_parser(
+        "revoke-signer", help="Revoke a receipt signer key id"
+    )
+    ledger_revoke.add_argument("--database", required=True)
+    ledger_revoke.add_argument("--key-id", required=True, dest="key_id")
+    ledger_revoke.set_defaults(antidote_handler="fleet_ledger_revoke")
+    ledger_rotate = ledger_commands.add_parser(
+        "rotate-signer", help="Allow a new signer and revoke the previous one"
+    )
+    ledger_rotate.add_argument("--database", required=True)
+    ledger_rotate.add_argument("--new-key-id", required=True, dest="new_key_id")
+    ledger_rotate.add_argument("--old-key-id", default="", dest="old_key_id")
+    ledger_rotate.set_defaults(antidote_handler="fleet_ledger_rotate")
 
 
 def format_report(report: InspectionReport) -> str:
@@ -414,6 +443,30 @@ def run_cli(args: argparse.Namespace, *, runtime: Any = None) -> int:
                     f"PASS={summary['pass']} DENY={summary['deny']} "
                     f"subjects={summary['subjects']}"
                 )
+            return 0
+        if handler == "fleet_ledger_trust":
+            state = ledger_trust_state(args.database)
+            if args.as_json:
+                print(json.dumps(state, indent=2, sort_keys=True))
+            else:
+                allowed = ", ".join(_terminal_text(item) for item in state["allowed"]) or "none"
+                revoked = ", ".join(_terminal_text(item) for item in state["revoked"]) or "none"
+                print(f"Allowed signers: {allowed}")
+                print(f"Revoked signers: {revoked}")
+            return 0
+        if handler == "fleet_ledger_allow":
+            ledger_allow_signer(args.database, args.key_id)
+            print(f"Allowed receipt signer {args.key_id[:12]}")
+            return 0
+        if handler == "fleet_ledger_revoke":
+            ledger_revoke_signer(args.database, args.key_id)
+            print(f"Revoked receipt signer {args.key_id[:12]}")
+            return 0
+        if handler == "fleet_ledger_rotate":
+            state = ledger_rotate_signer(
+                args.database, new_key_id=args.new_key_id, old_key_id=args.old_key_id
+            )
+            print(f"Trust root now allows {len(state['allowed'])} signer(s)")
             return 0
     except (OSError, ValueError, sqlite3.Error) as exc:
         print(f"llmAntidote error: {exc}")

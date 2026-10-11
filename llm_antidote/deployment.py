@@ -182,6 +182,8 @@ def load_runtime_settings(
         safe_read_roots=local.safe_read_roots,
         sensitive_roots=local.sensitive_roots,
         allow_outbound_tools=local.allow_outbound_tools,
+        taint_scope=local.taint_scope,
+        max_scan_bytes=local.max_scan_bytes,
     )
     require_route_observation = _as_bool(
         settings.get("admission_require_route_observation"), True

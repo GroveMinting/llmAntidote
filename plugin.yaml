@@ -29,6 +29,15 @@ config_schema:
     type: int
     default: 5
     description: Minutes a permitted-but-unresolved sensitive access blocks outbound calls.
+  taint_scope:
+    type: str
+    choices: [egress, egress_persist_shell, all]
+    default: egress_persist_shell
+    description: Which capabilities a completed sensitive read blocks in a session.
+  max_scan_bytes:
+    type: int
+    default: 1048576
+    description: Maximum tool-argument text scanned; larger arguments are refused.
   audit_capacity:
     type: int
     default: 200

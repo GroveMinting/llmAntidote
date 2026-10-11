@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Literal
+
+from .capabilities import ToolCapability, classify_tool, is_taint_safe_tool
 
 Action = Literal["allow", "approve", "block"]
 Mode = Literal["balanced", "strict", "audit"]
@@ -68,16 +72,40 @@ _REVERSE_SHELL: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?is)\bsocat\b.{0,500}\bexec:(?:ba)?sh\b"),
 )
 
-_TAINT_SAFE_TOOLS = {
-    "clarify",
-    "read_file",
-    "search_files",
-    "skills_list",
-    "skill_view",
-    "todo_read",
-}
 _NETWORK_CAPABLE_TOOLS = {"execute_code", "http_request", "terminal"}
+_FILESYSTEM_READ_TOOLS = {"read_file", "list_files", "search_files"}
+_READ_PATH_KEYS = {
+    "path",
+    "paths",
+    "file",
+    "files",
+    "file_path",
+    "filepath",
+    "filename",
+    "source",
+    "target",
+    "directory",
+    "dir",
+    "dirs",
+    "root",
+}
 _MAX_POLICY_CHARS = 262_144
+
+
+def _string_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        items = list(value)
+    else:
+        return ()
+    return tuple(dict.fromkeys(item.strip() for item in items if str(item).strip()))
+
+
+def _default_safe_roots() -> tuple[str, ...]:
+    return tuple(dict.fromkeys((os.getcwd(), tempfile.gettempdir())))
 
 
 def _argument_text(args: Any) -> tuple[str, bool]:
@@ -126,23 +154,108 @@ def _argument_text(args: Any) -> tuple[str, bool]:
     return value[:half] + value[-half:], True
 
 
+def extract_read_paths(args: Any) -> tuple[str, ...]:
+    """Collect candidate filesystem paths from read-tool arguments."""
+    found: list[str] = []
+    seen: set[int] = set()
+
+    def visit(value: Any, depth: int = 0) -> None:
+        if depth > 10:
+            return
+        if isinstance(value, dict):
+            identity = id(value)
+            if identity in seen:
+                return
+            seen.add(identity)
+            for key, item in value.items():
+                if str(key).lower() in _READ_PATH_KEYS:
+                    if isinstance(item, str):
+                        found.append(item)
+                    elif isinstance(item, (list, tuple)):
+                        found.extend(entry for entry in item if isinstance(entry, str))
+                else:
+                    visit(item, depth + 1)
+            seen.remove(identity)
+        elif isinstance(value, (list, tuple)):
+            identity = id(value)
+            if identity in seen:
+                return
+            seen.add(identity)
+            for item in value:
+                visit(item, depth + 1)
+            seen.remove(identity)
+
+    visit(args)
+    return tuple(dict.fromkeys(path for path in found if path))
+
+
+def _normalize_path(value: str) -> str:
+    try:
+        return os.path.realpath(os.path.abspath(os.path.expanduser(value)))
+    except (OSError, ValueError):
+        return ""
+
+
+def _within(path: str, root: str) -> bool:
+    if not path or not root:
+        return False
+    normalized_root = _normalize_path(root)
+    if not normalized_root:
+        return False
+    return path == normalized_root or path.startswith(normalized_root + os.sep)
+
+
+def classify_read_paths(
+    paths: tuple[str, ...],
+    *,
+    safe_roots: tuple[str, ...],
+    sensitive_roots: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return path-based access categories for a set of read targets."""
+    categories: set[str] = set()
+    if not paths:
+        categories.add("unclassified_read")
+        return tuple(sorted(categories))
+    for raw in paths:
+        resolved = _normalize_path(raw)
+        if any(_within(resolved, root) for root in sensitive_roots):
+            categories.add("sensitive_root_read")
+        elif any(_within(resolved, root) for root in safe_roots):
+            continue
+        else:
+            categories.add("read_outside_safe_root")
+    return tuple(sorted(categories))
+
+
 def sensitive_categories(text: str) -> tuple[str, ...]:
     """Return stable sensitive-source categories found in tool arguments."""
     return tuple(name for name, pattern in _SENSITIVE_PATTERNS if pattern.search(text))
 
 
-def is_taint_safe_tool(tool_name: str) -> bool:
-    return tool_name.lower().strip() in _TAINT_SAFE_TOOLS
-
-
 @dataclass(frozen=True)
 class PolicyConfig:
     mode: Mode = "balanced"
+    safe_read_roots: tuple[str, ...] = ()
+    sensitive_roots: tuple[str, ...] = ()
+    allow_outbound_tools: tuple[str, ...] = ()
+    classifier_version: int = 1
 
     @classmethod
     def from_value(cls, mode: Any) -> PolicyConfig:
         clean = str(mode or "balanced").lower().strip()
         return cls(mode=clean if clean in {"balanced", "strict", "audit"} else "balanced")
+
+    @classmethod
+    def from_settings(cls, settings: dict[str, Any] | None) -> PolicyConfig:
+        settings = settings or {}
+        config = cls.from_value(settings.get("mode", "balanced"))
+        safe_roots = _string_tuple(settings.get("safe_read_roots")) or _default_safe_roots()
+        return cls(
+            mode=config.mode,
+            safe_read_roots=safe_roots,
+            sensitive_roots=_string_tuple(settings.get("sensitive_roots")),
+            allow_outbound_tools=_string_tuple(settings.get("allow_outbound_tools")),
+        )
 
 
 @dataclass(frozen=True)
@@ -164,9 +277,25 @@ class PolicyEngine:
     def __init__(self, config: PolicyConfig | None = None) -> None:
         self.config = config or PolicyConfig()
 
+    def _read_categories(
+        self, tool_name: str, args: Any, known: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        clean = tool_name.lower().strip()
+        if clean not in _FILESYSTEM_READ_TOOLS:
+            return known
+        path_categories = classify_read_paths(
+            extract_read_paths(args),
+            safe_roots=self.config.safe_read_roots,
+            sensitive_roots=self.config.sensitive_roots,
+        )
+        return tuple(sorted({*known, *path_categories}))
+
     def assess(self, tool_name: str, args: Any, *, session_tainted: bool = False) -> PolicyDecision:
         text, oversized = _argument_text(args)
-        sensitive = sensitive_categories(text)
+        known = sensitive_categories(text)
+        sensitive = self._read_categories(tool_name, args, known)
+        profile = classify_tool(tool_name)
+        allow_listed = profile.name in self.config.allow_outbound_tools
         rules: list[str] = []
         desired: Action = "allow"
         message = ""
@@ -179,9 +308,9 @@ class PolicyEngine:
             desired = "block"
             rules.append("execution.remote_payload")
             message = "llmAntidote blocked a recognizable download-and-execute chain."
-        elif sensitive and _NETWORK_SINK.search(text):
+        elif known and _NETWORK_SINK.search(text):
             desired = "block"
-            rules.extend(f"exfil.{category}" for category in sensitive)
+            rules.extend(f"exfil.{category}" for category in known)
             message = "llmAntidote blocked a tool call combining sensitive access with egress."
         elif session_tainted and not is_taint_safe_tool(tool_name):
             desired = "block"
@@ -198,6 +327,19 @@ class PolicyEngine:
             desired = "approve"
             rules.extend(f"access.{category}" for category in sensitive)
             message = "llmAntidote requires approval for access to potentially sensitive material."
+        elif profile.requires_egress_approval and not allow_listed:
+            desired = "approve"
+            if profile.capability is ToolCapability.OUTBOUND_MESSAGE:
+                rules.append("egress.outbound_message")
+                message = (
+                    "llmAntidote requires approval for an outbound message or upload capability."
+                )
+            else:
+                rules.append("egress.unknown_plugin_tool")
+                message = (
+                    "llmAntidote requires approval for an unclassified plugin tool that may "
+                    "have outbound capability."
+                )
         elif _UPLOAD_SINK.search(text):
             desired = "approve"
             rules.append("egress.upload")
@@ -223,3 +365,16 @@ class PolicyEngine:
             sensitive=sensitive,
             message=message,
         )
+
+
+__all__ = [
+    "Action",
+    "Mode",
+    "PolicyConfig",
+    "PolicyDecision",
+    "PolicyEngine",
+    "classify_read_paths",
+    "extract_read_paths",
+    "is_taint_safe_tool",
+    "sensitive_categories",
+]

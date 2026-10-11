@@ -1,5 +1,5 @@
 name: llm-antidote
-version: "3.0.0"
+version: "3.1.0"
 manifest_version: 2
 api_version: 1
 description: Runtime guardrails, behavioral evaluation, and signed fleet admission for Hermes Agent
@@ -29,3 +29,53 @@ config_schema:
     type: int
     default: 200
     description: Maximum metadata-only decision records retained in memory.
+  safe_read_roots:
+    type: str
+    default: ""
+    description: Comma-separated directories where file reads are ordinary. Reads outside require approval.
+  sensitive_roots:
+    type: str
+    default: ""
+    description: Comma-separated directories that always require approval to read.
+  allow_outbound_tools:
+    type: str
+    default: ""
+    description: Comma-separated tool names the operator explicitly allows to send data out.
+  admission_enforcement:
+    type: str
+    choices: ["", disabled, enforced]
+    default: ""
+    description: Set to enforced to require a signed fleet policy and verified model binding at startup.
+  admission_policy_path:
+    type: str
+    default: ""
+    description: Enforced mode only. Path to the signed fleet policy JSON.
+  admission_policy_signature_path:
+    type: str
+    default: ""
+    description: Enforced mode only. Path to the detached policy signature JSON.
+  admission_policy_public_key:
+    type: str
+    default: ""
+    description: Enforced mode only. Path to the trusted policy authority public key.
+  admission_trusted_policy_sha256:
+    type: str
+    default: ""
+    description: Enforced mode only. Out-of-band trusted policy SHA-256 digest.
+  admission_require_model_binding:
+    type: str
+    choices: ["", "true", "false"]
+    default: "true"
+    description: Enforced mode only. Require the deployed model to match a verified lockfile.
+  admission_model_lock_path:
+    type: str
+    default: ""
+    description: Enforced mode only. Path to the admitted model lockfile.
+  admission_model_source:
+    type: str
+    default: ""
+    description: Enforced mode only. Deployed model directory to verify against the lockfile.
+  admission_model_name:
+    type: str
+    default: ""
+    description: Enforced mode only. Model name Hermes must serve for tool calls to proceed.

@@ -9,6 +9,7 @@ from llm_antidote.eval_client import (
     MAX_TOOL_CALLS,
     EvaluationClientError,
     OpenAICompatClient,
+    _NoRedirect,
     normalize_endpoint,
 )
 
@@ -30,6 +31,32 @@ def test_normalize_endpoint_restricts_plain_http():
         normalize_endpoint("http://models.example/v1")
     with pytest.raises(ValueError, match="credentials"):
         normalize_endpoint("https://user:secret@models.example/v1")
+
+
+def test_plain_http_lan_rejection_guides_operator():
+    with pytest.raises(ValueError, match="ssh -N -L"):
+        normalize_endpoint("http://spark-centurion:8000/v1")
+
+
+def test_explicit_trusted_host_permits_plain_http():
+    url, display = normalize_endpoint(
+        "http://spark-centurion:8000/v1", trusted_hosts=("spark-centurion",)
+    )
+    assert url == "http://spark-centurion:8000/v1/chat/completions"
+    assert display == "spark-centurion:8000"
+    with pytest.raises(ValueError):
+        normalize_endpoint("http://other-host:8000/v1", trusted_hosts=("spark-centurion",))
+
+
+def test_malformed_endpoint_is_rejected():
+    with pytest.raises(ValueError, match="absolute"):
+        normalize_endpoint("spark-centurion:8000/v1")
+
+
+def test_redirects_are_refused_by_handler():
+    handler = _NoRedirect()
+    assert handler.redirect_request(None, None, 302, "", None, "https://evil.example") is None
+
 
 
 def test_client_parses_tool_calls(monkeypatch):

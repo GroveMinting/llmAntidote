@@ -47,3 +47,15 @@ consequences of malicious model-generated tool calls.
 - PASS/DENY receipts with CI-compatible exit status.
 - Metadata-only SQLite ledger that ingests only verified signed receipts.
 - No automatic policy update channel or remote execution surface.
+
+## v3.1 Capability Policy and Enforced Admission
+
+- Versioned tool-capability classifier with safe/sensitive read roots.
+- Approval for reads outside safe roots, including unlisted secret filenames.
+- Capability-based detection of outbound connector and unknown plugin tools.
+- Pending-sensitive-access reservations that close the concurrent-read window.
+- Enforced runtime admission binding signed policy and a verified model lock.
+- Model-route binding that blocks tool calls when the served model changes.
+- External `fleet runtime-verify` startup/supervisor health probe.
+- Explicit trusted-host opt-in for plaintext evaluation endpoints.
+

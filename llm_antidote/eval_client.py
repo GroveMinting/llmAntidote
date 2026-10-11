@@ -62,15 +62,31 @@ def _is_loopback(hostname: str) -> bool:
         return False
 
 
-def normalize_endpoint(endpoint: str) -> tuple[str, str]:
+def _is_trusted(hostname: str, trusted_hosts: tuple[str, ...]) -> bool:
+    clean = hostname.lower().strip()
+    return any(clean == host.lower().strip() for host in trusted_hosts if host)
+
+
+def normalize_endpoint(
+    endpoint: str, *, trusted_hosts: tuple[str, ...] = ()
+) -> tuple[str, str]:
     raw = endpoint.strip().rstrip("/")
     parsed = urllib.parse.urlsplit(raw)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("Evaluation endpoint must be an absolute HTTP(S) URL")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("Evaluation endpoint must not contain credentials, query, or fragment")
-    if parsed.scheme == "http" and not _is_loopback(parsed.hostname):
-        raise ValueError("Plain HTTP evaluation endpoints are restricted to loopback hosts")
+    if (
+        parsed.scheme == "http"
+        and not _is_loopback(parsed.hostname)
+        and not _is_trusted(parsed.hostname, trusted_hosts)
+    ):
+        raise ValueError(
+            "Plain HTTP evaluation endpoints are restricted to loopback hosts. "
+            "Tunnel a remote endpoint (ssh -N -L 8000:127.0.0.1:8000 HOST) or pass "
+            "--trusted-host HOST to opt in, accepting that prompts and credentials travel "
+            "in cleartext."
+        )
     path = parsed.path.rstrip("/")
     if path.endswith("/chat/completions"):
         request_path = path
@@ -90,9 +106,12 @@ class OpenAICompatClient:
         *,
         api_key_env: str = "",
         timeout: float = 60.0,
+        trusted_hosts: tuple[str, ...] = (),
         opener: Callable[..., Any] | None = None,
     ) -> None:
-        self.request_url, self.endpoint_display = normalize_endpoint(endpoint)
+        self.request_url, self.endpoint_display = normalize_endpoint(
+            endpoint, trusted_hosts=trusted_hosts
+        )
         self.timeout = max(1.0, min(float(timeout), 600.0))
         self.api_key_env = api_key_env.strip()
         if self.api_key_env and not self.api_key_env.replace("_", "").isalnum():
@@ -132,7 +151,7 @@ class OpenAICompatClient:
             raise EvaluationClientError("Evaluation request could not be serialized") from exc
         if len(body) > MAX_REQUEST_BYTES:
             raise EvaluationClientError("Evaluation request exceeded the size limit")
-        headers = {"Content-Type": "application/json", "User-Agent": "llmAntidote/0.2.0"}
+        headers = {"Content-Type": "application/json", "User-Agent": "llmAntidote/3.1.0"}
         if self.api_key_env:
             value = os.environ.get(self.api_key_env)
             if not value:

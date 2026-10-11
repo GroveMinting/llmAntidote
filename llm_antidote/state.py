@@ -1,4 +1,16 @@
-"""Bounded session risk state containing metadata only."""
+"""Bounded session risk state containing metadata only.
+
+State tracks two related facts per session alias:
+
+* completed sensitive access (taint categories), and
+* in-flight sensitive access that has been permitted but has not yet completed
+  (a pending reservation).
+
+Pending reservations close the decision-ordering window in which an
+outbound-capable tool could be authorized before a sensitive read's post hook
+marks the session tainted. Neither field ever contains arguments, paths, or
+result content.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +23,7 @@ from dataclasses import dataclass, field
 @dataclass
 class SessionRisk:
     categories: set[str] = field(default_factory=set)
+    pending: int = 0
     updated_at: float = 0.0
 
 
@@ -25,6 +38,35 @@ class SessionRiskStore:
     def key(session_id: str = "", task_id: str = "") -> str:
         return str(session_id or task_id or "unknown")
 
+    @staticmethod
+    def _unique(keys: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(key for key in keys if key)) or ("unknown",)
+
+    def _live(self, key: str) -> SessionRisk | None:
+        item = self._items.get(key)
+        if item is None:
+            return None
+        if self._clock() - item.updated_at > self._ttl_seconds:
+            self._items.pop(key, None)
+            return None
+        return item
+
+    def _merge(self, keys: tuple[str, ...]) -> SessionRisk | None:
+        existing = [self._items[key] for key in keys if key in self._items]
+        if not existing:
+            return None
+        item = existing[0]
+        for other in existing[1:]:
+            if other is item:
+                continue
+            item.categories.update(other.categories)
+            item.pending = max(item.pending, other.pending)
+            item.updated_at = max(item.updated_at, other.updated_at)
+            for alias, value in tuple(self._items.items()):
+                if value is other:
+                    self._items[alias] = item
+        return item
+
     def mark(self, key: str, categories: tuple[str, ...] | list[str]) -> None:
         self.mark_many((key,), categories)
 
@@ -32,53 +74,65 @@ class SessionRiskStore:
         if not categories:
             return
         now = self._clock()
+        unique_keys = self._unique(keys)
         with self._lock:
-            unique_keys = tuple(dict.fromkeys(key for key in keys if key)) or ("unknown",)
-            existing = [self._items[key] for key in unique_keys if key in self._items]
-            item = existing[0] if existing else SessionRisk()
-            for other in existing[1:]:
-                if other is item:
-                    continue
-                item.categories.update(other.categories)
-                for alias, value in tuple(self._items.items()):
-                    if value is other:
-                        self._items[alias] = item
+            item = self._merge(unique_keys)
+            if item is None:
+                item = SessionRisk()
             item.categories.update(categories)
             item.updated_at = now
             for key in unique_keys:
                 self._items[key] = item
 
-    def link(self, keys: tuple[str, ...]) -> None:
-        unique_keys = tuple(dict.fromkeys(key for key in keys if key))
+    def reserve_pending(self, keys: tuple[str, ...]) -> None:
+        """Record that a permitted sensitive access is executing and unresolved."""
+        now = self._clock()
+        unique_keys = self._unique(keys)
         with self._lock:
-            existing = [self._items[key] for key in unique_keys if key in self._items]
-            if not existing:
+            item = self._merge(unique_keys)
+            if item is None:
+                item = SessionRisk()
+            item.pending += 1
+            item.updated_at = now
+            for key in unique_keys:
+                self._items[key] = item
+
+    def release_pending(self, keys: tuple[str, ...]) -> None:
+        """Resolve a pending reservation regardless of success or failure."""
+        now = self._clock()
+        unique_keys = self._unique(keys)
+        with self._lock:
+            item = self._merge(unique_keys)
+            if item is None:
                 return
-            item = existing[0]
-            for other in existing[1:]:
-                if other is item:
-                    continue
-                item.categories.update(other.categories)
-                item.updated_at = max(item.updated_at, other.updated_at)
-                for alias, value in tuple(self._items.items()):
-                    if value is other:
-                        self._items[alias] = item
+            item.pending = max(0, item.pending - 1)
+            item.updated_at = now
+
+    def link(self, keys: tuple[str, ...]) -> None:
+        unique_keys = self._unique(keys)
+        if len(unique_keys) < 2:
+            return
+        with self._lock:
+            item = self._merge(unique_keys)
+            if item is None:
+                return
             for key in unique_keys:
                 self._items[key] = item
 
     def categories(self, key: str) -> tuple[str, ...]:
-        now = self._clock()
         with self._lock:
-            item = self._items.get(key)
+            item = self._live(key)
             if item is None:
-                return ()
-            if now - item.updated_at > self._ttl_seconds:
-                self._items.pop(key, None)
                 return ()
             return tuple(sorted(item.categories))
 
     def is_tainted(self, key: str) -> bool:
         return bool(self.categories(key))
+
+    def has_pending(self, key: str) -> bool:
+        with self._lock:
+            item = self._live(key)
+            return item is not None and item.pending > 0
 
     def clear(self, *keys: str) -> None:
         with self._lock:
@@ -96,9 +150,15 @@ class SessionRiskStore:
     def summary(self) -> dict[str, object]:
         with self._lock:
             for key in tuple(self._items):
-                self.categories(key)
-            unique = {id(item): item for item in self._items.values() if item.categories}
+                self._live(key)
+            unique = {id(item): item for item in self._items.values()}
             categories = sorted(
                 {category for item in unique.values() for category in item.categories}
             )
-            return {"tainted_sessions": len(unique), "categories": categories}
+            tainted = sum(1 for item in unique.values() if item.categories)
+            pending = sum(1 for item in unique.values() if item.pending > 0)
+            return {
+                "tainted_sessions": tainted,
+                "pending_sessions": pending,
+                "categories": categories,
+            }

@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented here.
 
+## 3.1.0 - 2026-10-10
+
+- Add a versioned tool-capability classifier that reasons about what a tool can do, not only its argument text.
+- Require approval for reads outside operator-configured safe roots, including unlisted secret filenames.
+- Classify outbound connector/message and unknown plugin tools as egress-capable.
+- Reserve pending sensitive access atomically to close the concurrent-read decision window.
+- Add enforced fleet-admission mode: signed policy and verified model binding are required at plugin startup.
+- Bind runtime `mode`/`taint_ttl_minutes` to the signed fleet policy and refuse conflicting local overrides.
+- Block tool calls when the served model route does not match the admitted model.
+- Add `fleet runtime-verify` for an external startup/supervisor health probe.
+- Allow explicit `--trusted-host` plaintext HTTP evaluation endpoints with cleartext warnings.
+- Document residual batch-ordering, restart, and serving-integration limits.
+
 ## 3.0.0 - 2026-10-08
 
 - Add Ed25519 key generation and detached canonical-JSON signatures.

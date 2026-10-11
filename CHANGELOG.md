@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented here.
 
+## 3.2.3 - 2026-10-11
+
+Catalog-readiness pass for submission to the Hermes plugin catalog
+(`docs/CATALOG_SUBMISSION.md`).
+
+- Bound the runtime dependency: `cryptography>=42,<51` (was a bare `>=42` floor)
+  in `pyproject.toml` and `requirements.txt`, to satisfy the catalog's dependency
+  policy while still co-installing with Hermes' pinned version.
+- Route the evaluation CLI's API key through Hermes' secret scope
+  (`agent.secret_scope.get_secret`) when running inside Hermes, falling back to
+  the named environment variable only in the standalone entry point, and failing
+  closed if a scoped read raises. Add `resolve_api_key` tests.
+- Add a README **Disclosure** section (network, reads, credentials, storage, no
+  telemetry/shell) and document the three `caution` security-scan false positives.
+- Add `docs/CATALOG_SUBMISSION.md` with the ready entry, validation commands, and
+  rule-13 disclosure text.
+
 ## 3.2.2 - 2026-10-11
 
 - Fix a taint-bypass egress channel: `text_to_speech` was classified as a local

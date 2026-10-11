@@ -18,7 +18,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Security",
 ]
-dependencies = ["cryptography>=42,<47"]
+dependencies = ["cryptography>=42"]
 
 # Development tooling is intentionally NOT a [project.optional-dependencies] extra.
 # Hermes installs directory plugins into a uv workspace and resolves it with

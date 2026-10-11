@@ -340,6 +340,13 @@ class PolicyEngine:
                     "llmAntidote requires approval for an unclassified plugin tool that may "
                     "have outbound capability."
                 )
+        elif profile.requires_persist_approval:
+            desired = "approve"
+            rules.append("persist.durable_write")
+            message = (
+                "llmAntidote requires approval for a tool with durable persistence or "
+                "scheduling capability."
+            )
         elif _UPLOAD_SINK.search(text):
             desired = "approve"
             rules.append("egress.upload")

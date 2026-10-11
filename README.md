@@ -320,15 +320,16 @@ tool arguments, credentials, or model output.
 ## Development
 
 ```bash
-python -m pip install -e '.[dev]'
+python -m pip install -e .
+python -m pip install -r requirements-dev.txt
 pytest
 ruff check .
 ```
 
-The editable install above is for development dependencies only. llmAntidote
-is distributed as a Hermes directory plugin through `hermes plugins install`;
-it does not expose a pip plugin entry point that could bypass the manifest's
-Hermes version requirement.
+Development tooling lives in `requirements-dev.txt`, not a `[project.optional-dependencies]`
+extra: Hermes resolves directory plugins with `--all-extras`, so a `dev` extra
+would be installed into the host environment and can conflict with Hermes' own
+pinned tooling.
 
 When Hermes is installed locally, also run:
 

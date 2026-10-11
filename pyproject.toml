@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-antidote"
-version = "3.2.2"
+version = "3.2.3"
 description = "Runtime guardrails, behavioral evaluation, and signed fleet admission for Hermes Agent"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,7 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Security",
 ]
-dependencies = ["cryptography>=42"]
+dependencies = ["cryptography>=42,<51"]
 
 # Development tooling is intentionally NOT a [project.optional-dependencies] extra.
 # Hermes installs directory plugins into a uv workspace and resolves it with
@@ -49,6 +49,10 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unused_configs = true
 strict_equality = true
+
+[[tool.mypy.overrides]]
+module = ["agent.*"]
+ignore_missing_imports = true
 
 [tool.coverage.run]
 branch = true

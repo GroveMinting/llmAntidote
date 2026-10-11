@@ -24,6 +24,29 @@ class EvaluationClientError(RuntimeError):
     """Sanitized endpoint failure safe to include in a local report."""
 
 
+def resolve_api_key(name: str) -> str:
+    """Resolve an API key by environment-variable name through Hermes' secret scope.
+
+    Inside Hermes this reads the credential with ``agent.secret_scope.get_secret``,
+    which honours the active profile and fails closed under multiplexing rather
+    than leaking another profile's value. Outside Hermes (the standalone
+    ``llm-antidote``/CI entry point, where ``agent`` is not importable) it falls
+    back to ``os.environ`` for the process-injected credential. If a scoped read
+    raises, it returns empty instead of falling through to a bare environment read.
+    """
+    clean = (name or "").strip()
+    if not clean:
+        return ""
+    try:
+        from agent.secret_scope import get_secret
+    except Exception:
+        return os.environ.get(clean, "")
+    try:
+        return get_secret(clean) or ""
+    except Exception:
+        return ""
+
+
 @dataclass(frozen=True)
 class ToolCall:
     id: str
@@ -164,9 +187,9 @@ class OpenAICompatClient:
             raise EvaluationClientError("Evaluation request could not be serialized") from exc
         if len(body) > MAX_REQUEST_BYTES:
             raise EvaluationClientError("Evaluation request exceeded the size limit")
-        headers = {"Content-Type": "application/json", "User-Agent": "llmAntidote/3.2.2"}
+        headers = {"Content-Type": "application/json", "User-Agent": "llmAntidote/3.2.3"}
         if self.api_key_env:
-            value = os.environ.get(self.api_key_env)
+            value = resolve_api_key(self.api_key_env)
             if not value:
                 raise EvaluationClientError(
                     f"Required API key environment variable is not set: {self.api_key_env}"

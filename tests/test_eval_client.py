@@ -1,5 +1,7 @@
 import http.client
 import json
+import sys
+import types
 import urllib.error
 import urllib.request
 
@@ -11,6 +13,7 @@ from llm_antidote.eval_client import (
     OpenAICompatClient,
     _NoRedirect,
     normalize_endpoint,
+    resolve_api_key,
 )
 
 
@@ -242,3 +245,38 @@ def test_loopback_client_disables_environment_proxies(monkeypatch):
     proxy_handlers = [item for item in captured if isinstance(item, urllib.request.ProxyHandler)]
     assert len(proxy_handlers) == 1
     assert proxy_handlers[0].proxies == {}
+
+
+def _install_secret_scope(monkeypatch, get_secret):
+    module = types.ModuleType("agent.secret_scope")
+    module.get_secret = get_secret
+    monkeypatch.setitem(sys.modules, "agent", types.ModuleType("agent"))
+    monkeypatch.setitem(sys.modules, "agent.secret_scope", module)
+
+
+def test_resolve_api_key_prefers_hermes_secret_scope(monkeypatch):
+    monkeypatch.setenv("LOCAL_MODEL_KEY", "from-environ")
+    _install_secret_scope(monkeypatch, lambda name, default=None: "from-scope")
+    assert resolve_api_key("LOCAL_MODEL_KEY") == "from-scope"
+
+
+def test_resolve_api_key_falls_back_to_environ_without_hermes(monkeypatch):
+    monkeypatch.setenv("LOCAL_MODEL_KEY", "from-environ")
+    monkeypatch.setitem(sys.modules, "agent", None)
+    monkeypatch.setitem(sys.modules, "agent.secret_scope", None)
+    assert resolve_api_key("LOCAL_MODEL_KEY") == "from-environ"
+
+
+def test_resolve_api_key_fails_closed_when_scope_raises(monkeypatch):
+    monkeypatch.setenv("LOCAL_MODEL_KEY", "from-environ")
+
+    def boom(name, default=None):
+        raise RuntimeError("no active profile scope")
+
+    _install_secret_scope(monkeypatch, boom)
+    assert resolve_api_key("LOCAL_MODEL_KEY") == ""
+
+
+def test_resolve_api_key_empty_name_is_empty(monkeypatch):
+    monkeypatch.setenv("LOCAL_MODEL_KEY", "from-environ")
+    assert resolve_api_key("") == ""

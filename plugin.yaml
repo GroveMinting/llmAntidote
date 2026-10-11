@@ -25,6 +25,10 @@ config_schema:
     type: int
     default: 60
     description: Minutes that sensitive-read metadata remains active in a session.
+  pending_ttl_minutes:
+    type: int
+    default: 5
+    description: Minutes a permitted-but-unresolved sensitive access blocks outbound calls.
   audit_capacity:
     type: int
     default: 200
@@ -67,6 +71,11 @@ config_schema:
     choices: ["", "true", "false"]
     default: "true"
     description: Enforced mode only. Require the deployed model to match a verified lockfile.
+  admission_require_route_observation:
+    type: str
+    choices: ["", "true", "false"]
+    default: "true"
+    description: Enforced mode only. Block tool calls until a pre_api_request confirms the model.
   admission_model_lock_path:
     type: str
     default: ""

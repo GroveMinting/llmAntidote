@@ -50,6 +50,7 @@ class RuntimePolicyBinding:
     model_name: str = ""
     model_lock_sha256: str = ""
     verified: bool = False
+    require_route_observation: bool = False
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -64,6 +65,7 @@ class RuntimePolicyBinding:
             "admitted_model": self.model_name,
             "model_lock_sha256": self.model_lock_sha256,
             "verified": self.verified,
+            "require_route_observation": self.require_route_observation,
         }
 
 
@@ -71,6 +73,7 @@ class RuntimePolicyBinding:
 class RuntimeSettings:
     policy: PolicyConfig
     taint_ttl_minutes: int
+    pending_ttl_minutes: int
     audit_capacity: int
     binding: RuntimePolicyBinding
 
@@ -148,15 +151,17 @@ def load_runtime_settings(
 
     if not _is_enforced(settings):
         ttl = _bounded_int(settings.get("taint_ttl_minutes", 60), 60, 24 * 60)
+        pending_ttl = _bounded_int(settings.get("pending_ttl_minutes", 5), 5, 24 * 60)
         binding = RuntimePolicyBinding(
             enforced=False, mode=local.mode, taint_ttl_minutes=ttl, verified=False
         )
-        return RuntimeSettings(local, ttl, capacity, binding)
+        return RuntimeSettings(local, ttl, pending_ttl, capacity, binding)
 
     policy, policy_sha256 = _load_signed_policy(settings)
     runtime = policy["runtime"]
     mode = str(runtime["mode"])
     ttl = int(runtime["taint_ttl_minutes"])
+    pending_ttl = _bounded_int(settings.get("pending_ttl_minutes", 5), 5, 24 * 60)
 
     if "mode" in settings and str(settings["mode"]).strip().lower() != mode:
         raise ValueError("Local mode conflicts with the signed fleet policy runtime mode")
@@ -178,6 +183,9 @@ def load_runtime_settings(
         sensitive_roots=local.sensitive_roots,
         allow_outbound_tools=local.allow_outbound_tools,
     )
+    require_route_observation = _as_bool(
+        settings.get("admission_require_route_observation"), True
+    )
     binding = RuntimePolicyBinding(
         enforced=True,
         mode=mode,
@@ -188,5 +196,6 @@ def load_runtime_settings(
         model_name=str(settings.get("admission_model_name", "")).strip(),
         model_lock_sha256=lock_digest,
         verified=require_binding,
+        require_route_observation=require_route_observation,
     )
-    return RuntimeSettings(enforced_policy, ttl, capacity, binding)
+    return RuntimeSettings(enforced_policy, ttl, pending_ttl, capacity, binding)

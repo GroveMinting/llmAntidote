@@ -203,3 +203,35 @@ def test_cli_runtime_verify_passes_then_fails_on_tamper(tmp_path):
     assert run_cli(args) == 0
     (tmp_path / "model" / "model.safetensors").write_bytes(b"tampered")
     assert run_cli(args) == 1
+
+
+def test_enforced_route_binding_fails_closed_before_observation(tmp_path):
+    fixture = enforced_fixture(tmp_path)
+    ctx = FakeContext(fixture["settings"])
+    register(ctx)
+    blocked = ctx.hooks["pre_tool_call"](tool_name="read_file", args={"path": "/work/x"})
+    assert blocked["action"] == "block"
+    assert "has not been verified" in blocked["message"]
+
+
+def test_enforced_route_binding_fails_closed_on_empty_model(tmp_path):
+    fixture = enforced_fixture(tmp_path)
+    ctx = FakeContext(fixture["settings"])
+    register(ctx)
+    ctx.hooks["pre_api_request"](provider="local", model="", base_url="http://127.0.0.1:8000/v1")
+    blocked = ctx.hooks["pre_tool_call"](tool_name="read_file", args={"path": "/work/x"})
+    assert blocked["action"] == "block"
+    assert "has not been verified" in blocked["message"]
+
+
+def test_enforced_route_observation_optional(tmp_path):
+    fixture = enforced_fixture(tmp_path)
+    settings = dict(fixture["settings"], admission_require_route_observation="false")
+    ctx = FakeContext(settings)
+    register(ctx)
+    assert ctx.hooks["pre_tool_call"](tool_name="read_file", args={"path": "/work/x"}) is None
+
+
+def test_standalone_resolves_pending_ttl_default(tmp_path):
+    resolved = load_runtime_settings({"mode": "balanced"})
+    assert resolved.pending_ttl_minutes == 5

@@ -25,11 +25,26 @@ class SessionRisk:
     categories: set[str] = field(default_factory=set)
     pending: int = 0
     updated_at: float = 0.0
+    pending_at: float = 0.0
+
+
+def _bounded_minutes(value: int, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, min(parsed, 24 * 60))
 
 
 class SessionRiskStore:
-    def __init__(self, ttl_minutes: int = 60, clock: Callable[[], float] = time.monotonic) -> None:
-        self._ttl_seconds = max(1, min(int(ttl_minutes), 24 * 60)) * 60
+    def __init__(
+        self,
+        taint_ttl_minutes: int = 60,
+        pending_ttl_minutes: int = 5,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._taint_seconds = _bounded_minutes(taint_ttl_minutes, 60) * 60
+        self._pending_seconds = _bounded_minutes(pending_ttl_minutes, 5) * 60
         self._clock = clock
         self._items: dict[str, SessionRisk] = {}
         self._lock = threading.RLock()
@@ -46,7 +61,12 @@ class SessionRiskStore:
         item = self._items.get(key)
         if item is None:
             return None
-        if self._clock() - item.updated_at > self._ttl_seconds:
+        now = self._clock()
+        if item.categories and now - item.updated_at > self._taint_seconds:
+            item.categories.clear()
+        if item.pending > 0 and now - item.pending_at > self._pending_seconds:
+            item.pending = 0
+        if not item.categories and item.pending <= 0:
             self._items.pop(key, None)
             return None
         return item
@@ -62,6 +82,7 @@ class SessionRiskStore:
             item.categories.update(other.categories)
             item.pending = max(item.pending, other.pending)
             item.updated_at = max(item.updated_at, other.updated_at)
+            item.pending_at = max(item.pending_at, other.pending_at)
             for alias, value in tuple(self._items.items()):
                 if value is other:
                     self._items[alias] = item
@@ -94,6 +115,7 @@ class SessionRiskStore:
                 item = SessionRisk()
             item.pending += 1
             item.updated_at = now
+            item.pending_at = now
             for key in unique_keys:
                 self._items[key] = item
 
@@ -107,6 +129,7 @@ class SessionRiskStore:
                 return
             item.pending = max(0, item.pending - 1)
             item.updated_at = now
+            item.pending_at = now
 
     def link(self, keys: tuple[str, ...]) -> None:
         unique_keys = self._unique(keys)

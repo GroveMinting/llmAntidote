@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-CAPABILITY_CLASSIFIER_VERSION = "2"
+CAPABILITY_CLASSIFIER_VERSION = "3"
 
 
 class ToolCapability(StrEnum):
@@ -103,7 +103,6 @@ _LOCAL_WRITE: frozenset[str] = frozenset(
         "write_file",
         "patch",
         "apply_patch",
-        "text_to_speech",
         "desktop_project",
     }
 )
@@ -140,6 +139,11 @@ _OUTBOUND_NETWORK: frozenset[str] = frozenset(
         "vision_analyze",
         "video_analyze",
         "browser_exec",
+        # TTS sends the spoken text to a provider. The built-in providers
+        # (edge/elevenlabs/openai/minimax/xai/mistral/gemini) are remote; only a
+        # user-configured `command` provider is local. Treated as egress
+        # conservatively so it is scanned and taint-blocked like other network tools.
+        "text_to_speech",
     }
 )
 

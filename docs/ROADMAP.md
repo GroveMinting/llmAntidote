@@ -36,6 +36,17 @@ marked with their status.
   (`admission.model_route_unconfigured`); `/antidote status` reports the route
   reason and registration logs the enforcement configuration.
 
+## Shipped in 3.2.2
+
+- **P1 taint bypass** - `text_to_speech` was classified local-write (not outbound),
+  so a tainted session did not block speaking a secret, and its `text` payload was
+  exempted from scanning and the size gate as a "content key". It is now an
+  outbound-network capability (built-in TTS providers are remote) and its text is
+  scanned and size-gated.
+- **P1 false negative** - the content-key exemption is limited to the file-write
+  tools (`write_file`/`patch`/`apply_patch`) instead of every local-write
+  capability, so other local-write payloads are no longer silently unscanned.
+
 ## Open
 
 ### P2 - Evaluation / fleet

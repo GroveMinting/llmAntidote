@@ -45,6 +45,12 @@ reconciled against a maintained inventory of the real Hermes tool surface
 (`tests/data/hermes_tool_inventory.json`); a test fails when a known tool falls
 through to `unknown`.
 
+Speech output (`text_to_speech`) is classified as outbound network: its text is
+sent to a provider, and the built-in providers (`edge`, `elevenlabs`, `openai`,
+`minimax`, `xai`, `mistral`, `gemini`) are remote. A user-configured local
+`command` provider is still classified outbound conservatively. Like other
+outbound tools it is scanned in full and blocked by session taint.
+
 The classifier is a static, name-based heuristic. Regexes remain useful for
 recognizing obvious malicious command shapes, but cannot prove that arbitrary
 shell or Python code is harmless.
@@ -73,12 +79,14 @@ capabilities require approval in balanced mode. Operators may narrow this with
 ## Content Versus Intent
 
 Exfiltration and payload rules are applied to what a tool *does*, not to data it
-merely carries. For local-write tools (`write_file`, `patch`, `apply_patch`) the
-written content is not scanned for egress patterns; only the target path is
+merely carries. For the file-write tools (`write_file`, `patch`, `apply_patch`)
+the written content is not scanned for egress patterns; only the target path is
 checked, and writes into `sensitive_roots` are flagged
-(`access.sensitive_root_write`). Shell and code tools are still scanned as command
-intent. This avoids blocking documentation that quotes an example command while
-keeping genuine egress paths covered.
+(`access.sensitive_root_write`). The exemption applies to those file-write tools
+specifically, not to every local-write capability, so payloads of other tools
+(such as `text_to_speech`) are scanned and size-gated normally. Shell and code
+tools are still scanned as command intent. This avoids blocking documentation
+that quotes an example command while keeping genuine egress paths covered.
 
 Argument scanning is bounded by `max_scan_bytes` (default 1 MiB). The entire
 bounded text is scanned, so a pattern buried mid-payload is matched; arguments

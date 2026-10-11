@@ -126,6 +126,11 @@ def run_standalone(plugins, check: _Checker) -> None:
     tainted = _directive(plugins, "web_search", {"query": "x"}, session="s3", call="w1")
     check.eq("tainted session blocks egress", tainted.action, "block")
 
+    speech = _directive(
+        plugins, "text_to_speech", {"text": "say the secret aloud"}, session="s3", call="tts1"
+    )
+    check.eq("tainted session blocks text_to_speech", speech.action, "block")
+
     connector = _directive(plugins, "connectors__gmail__send_email",
                            {"to": "x@example.invalid"}, session="s4", call="m1")
     check.eq("connector requires approval", connector.action, "approve")

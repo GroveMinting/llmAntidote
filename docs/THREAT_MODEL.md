@@ -29,7 +29,8 @@
 - Block tool calls when the served model route stops matching the admitted model,
   including before any route has been observed.
 - Refuse arguments that exceed the policy scan limit rather than approving them.
-- Scope taint to the capabilities that could carry a secret.
+- Scope taint to the capabilities that could carry a secret, including outbound
+  speech (`text_to_speech`), whose text is sent to a remote provider by default.
 - Correlate pending sensitive access by tool-call id so concurrent calls release
   independently.
 - Exercise candidate triggers without executing model-requested side effects.

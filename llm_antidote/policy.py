@@ -356,11 +356,13 @@ class PolicyEngine:
     def assess(self, tool_name: str, args: Any, *, session_tainted: bool = False) -> PolicyDecision:
         profile = classify_tool(tool_name)
         limit = self.config.max_scan_bytes
-        is_write = profile.capability is ToolCapability.LOCAL_WRITE or (
-            tool_name.lower().strip() in _WRITE_PATH_TOOLS
-        )
+        clean_name = tool_name.lower().strip()
+        content_exempt = clean_name in _WRITE_PATH_TOOLS
+        is_write = profile.capability is ToolCapability.LOCAL_WRITE or content_exempt
         if is_write:
-            scan_text, oversized = _argument_text(args, limit, exclude_keys=_CONTENT_KEYS)
+            scan_text, oversized = _argument_text(
+                args, limit, exclude_keys=_CONTENT_KEYS if content_exempt else frozenset()
+            )
             known = sensitive_categories(scan_text)
             write_categories = classify_write_paths(
                 extract_read_paths(args), sensitive_roots=self.config.sensitive_roots

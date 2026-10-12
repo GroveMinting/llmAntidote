@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented here.
 
+## 3.2.4 - 2026-10-12
+
+- Fix a denial-of-service in the `environment_secret` detection regex
+  (`policy.py`): the unbounded `(?:\S*/)?env\b` alternative backtracked
+  quadratically on long single-line tool arguments (a ~100 KB run of `;` took
+  seconds per `assess()` while holding the GIL, stalling the whole agent). Replace
+  it with a bounded path form, `(?:[^\s;&|/]{0,256}/){0,16}env\b`, which still
+  detects `env`, `/usr/bin/env`, and friends but in linear time.
+- Add `tests/test_policy_performance.py`, timing the full sensitive-pattern set
+  plus `_UPLOAD_SINK`/`_DOWNLOAD_EXECUTE` on >=100 KB single-line inputs and an
+  end-to-end `assess()`, asserting a sub-second budget.
+
 ## 3.2.3 - 2026-10-11
 
 Catalog-readiness pass for submission to the Hermes plugin catalog

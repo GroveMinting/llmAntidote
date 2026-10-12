@@ -3,4 +3,4 @@
 from .policy import PolicyConfig, PolicyDecision, PolicyEngine
 
 __all__ = ["PolicyConfig", "PolicyDecision", "PolicyEngine"]
-__version__ = "3.2.3"
+__version__ = "3.2.4"

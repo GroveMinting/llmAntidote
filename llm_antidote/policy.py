@@ -19,7 +19,7 @@ _SENSITIVE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"(?ix)(?:^|[/\\\s'\"])(?:\.env(?:\.(?!example\b)[a-z0-9_-]+)?|\.envrc)"
             r"(?:$|[/\\\s'\";&|)}\]])|/proc/(?:self|\d+)/environ\b|\bprintenv\b|"
-            r"(?:^|[\s;&|])(?:\S*/)?env\b|"
+            r"(?:^|[\s;&|])(?:[^\s;&|/]{0,256}/){0,16}env\b|"
             r"\b(?:export\s+-p|declare\s+-x)\b"
         ),
     ),

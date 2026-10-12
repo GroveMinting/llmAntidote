@@ -187,7 +187,7 @@ class OpenAICompatClient:
             raise EvaluationClientError("Evaluation request could not be serialized") from exc
         if len(body) > MAX_REQUEST_BYTES:
             raise EvaluationClientError("Evaluation request exceeded the size limit")
-        headers = {"Content-Type": "application/json", "User-Agent": "llmAntidote/3.2.3"}
+        headers = {"Content-Type": "application/json", "User-Agent": "llmAntidote/3.2.4"}
         if self.api_key_env:
             value = resolve_api_key(self.api_key_env)
             if not value:

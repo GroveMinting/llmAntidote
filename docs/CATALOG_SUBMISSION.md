@@ -24,18 +24,18 @@ Both pass at the pinned commit. The security scan reports `caution` (not
 
 Place this at `plugin-catalog/llm-antidote.yaml` in `NousResearch/hermes-agent`.
 Pin `sha` to the full 40-character commit of the release being submitted (the
-tagged `v3.2.3` commit) and keep `version` in step with it.
+tagged `v3.2.4` commit) and keep `version` in step with it.
 
 ```yaml
 name: llm-antidote
 repo: https://github.com/GroveMinting/llmAntidote
-sha: "2070999bcb0eeada738d4419722815fe17e5a033"
+sha: "c7f6a5428abbdba2b48f8b5fd3494b7ae2e3c5e8"
 description: Runtime guardrails, behavioral evaluation, and signed fleet admission for Hermes Agent.
 maintainer: GroveMinting
 tier: community
 category: tools
 requires_hermes: ">=0.21.5"
-version: "3.2.3"
+version: "3.2.4"
 capabilities:
   provides_tools: []
   provides_hooks:
